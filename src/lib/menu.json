@@ -1,0 +1,292 @@
+[
+  {
+    "id": "dosa",
+    "title": "Dosa & South Indian",
+    "items": [
+      {
+        "name": "Plain Dosa",
+        "price": "$12.90",
+        "description": ""
+      },
+      {
+        "name": "Masala Dosa",
+        "price": "$16.90",
+        "description": ""
+      },
+      {
+        "name": "Mysoore Masala Dosa",
+        "price": "$17.90",
+        "description": ""
+      },
+      {
+        "name": "Onion Dosa",
+        "price": "$16.90",
+        "description": ""
+      },
+      {
+        "name": "Podi Dosa",
+        "price": "$16.90",
+        "description": ""
+      },
+      {
+        "name": "Rava Dosa",
+        "price": "$17.90",
+        "description": ""
+      },
+      {
+        "name": "Paneer Dosa",
+        "price": "$17.90",
+        "description": ""
+      },
+      {
+        "name": "Chicken Dosa",
+        "price": "$18.90",
+        "description": ""
+      },
+      {
+        "name": "Idly",
+        "price": "$10.90",
+        "description": ""
+      },
+      {
+        "name": "Medhu Vada",
+        "price": "$12.90",
+        "description": "With sambar and coconut chutney."
+      },
+      {
+        "name": "Veg Kothu Parotta",
+        "price": "$14.90",
+        "description": "Parotta tossed with veg salna, onion, tomatoes and gravy."
+      },
+      {
+        "name": "Chicken Kothu Parotta",
+        "price": "$17.90",
+        "description": "Parotta with salna, egg, chicken and gravy."
+      }
+    ]
+  },
+  {
+    "id": "starters",
+    "title": "To start",
+    "items": [
+      {
+        "name": "Punjabi Samosa",
+        "price": "$6.90",
+        "description": "Three pieces with sweet chutney."
+      },
+      {
+        "name": "Samosa Chaat",
+        "price": "$12.90",
+        "description": "Samosa with white peas masala and chutneys."
+      },
+      {
+        "name": "Paani Poori",
+        "price": "$10.90",
+        "description": "Crispy shells with spicy tangy syrup."
+      },
+      {
+        "name": "Onion Bhaji",
+        "price": "$7.90",
+        "description": "Spiced sliced onion, fried crisp."
+      },
+      {
+        "name": "Paneer Tikka",
+        "price": "$14.90",
+        "description": "Paneer, onion and capsicum from the tandoor."
+      },
+      {
+        "name": "Gun Powder Paneer Tikka",
+        "price": "$14.90",
+        "description": "Southern spices and mint chutney."
+      },
+      {
+        "name": "Chicken Lollipop",
+        "price": "$13.90",
+        "description": "Crispy winglets in hot garlic sauce."
+      },
+      {
+        "name": "Chicken Tikka",
+        "price": "$14.90",
+        "description": "Clay oven chicken with mint chutney."
+      },
+      {
+        "name": "Chicken 65",
+        "price": "$15.90",
+        "description": "Batter fried chicken with spice chutney."
+      },
+      {
+        "name": "Curryleaf Prawn",
+        "price": "$15.90",
+        "description": "Crispy prawns infused with curry leaf."
+      }
+    ]
+  },
+  {
+    "id": "curries",
+    "title": "Curries",
+    "items": [
+      {
+        "name": "Kadai Paneer",
+        "price": "$17.90",
+        "description": "Paneer in onion gravy."
+      },
+      {
+        "name": "Paneer Makhni",
+        "price": "$17.90",
+        "description": "Paneer in tomato gravy."
+      },
+      {
+        "name": "Palak Paneer",
+        "price": "$17.90",
+        "description": "Paneer with spinach pur\u00e9e."
+      },
+      {
+        "name": "Vegetable Korma",
+        "price": "$16.90",
+        "description": "Vegetables with spices and coconut milk."
+      },
+      {
+        "name": "Yellow Daal Tadka",
+        "price": "$11.90",
+        "description": "Yellow dhal tempered with Indian spices."
+      },
+      {
+        "name": "Daal Makhni",
+        "price": "$12.90",
+        "description": "Black urad dal and kidney beans, butter and cream."
+      },
+      {
+        "name": "Butter Chicken",
+        "price": "$18.90",
+        "description": "Chicken in butter gravy."
+      },
+      {
+        "name": "Chicken Chettinadu",
+        "price": "$18.90",
+        "description": "Chicken with South Indian herbs and coconut milk."
+      },
+      {
+        "name": "Chicken Vindaloo",
+        "price": "$18.90",
+        "description": "Chicken in hot vindaloo sauce."
+      },
+      {
+        "name": "Lamb Chettinadu",
+        "price": "$19.90",
+        "description": "Lamb with South Indian herbs and coconut milk."
+      },
+      {
+        "name": "Goat Curry",
+        "price": "$20.90",
+        "description": "Goat in a spicy Indian gravy."
+      },
+      {
+        "name": "Fish Curry",
+        "price": "$24.90",
+        "description": "Fish with tomato, tamarind and coconut."
+      }
+    ]
+  },
+  {
+    "id": "rice",
+    "title": "Biryani, Rice & Breads",
+    "items": [
+      {
+        "name": "Veg Biryani",
+        "price": "$14.90",
+        "description": ""
+      },
+      {
+        "name": "Chicken Biryani",
+        "price": "$17.90",
+        "description": ""
+      },
+      {
+        "name": "Goat Biryani",
+        "price": "$18.90",
+        "description": ""
+      },
+      {
+        "name": "Steamed Rice",
+        "price": "$3.90",
+        "description": ""
+      },
+      {
+        "name": "Jeera Rice",
+        "price": "$5.50",
+        "description": ""
+      },
+      {
+        "name": "Plain Naan",
+        "price": "$3.50",
+        "description": ""
+      },
+      {
+        "name": "Garlic Naan",
+        "price": "$4.50",
+        "description": ""
+      },
+      {
+        "name": "Cheese and Garlic Naan",
+        "price": "$5.50",
+        "description": ""
+      },
+      {
+        "name": "Roti",
+        "price": "$3.50",
+        "description": ""
+      },
+      {
+        "name": "Parotta",
+        "price": "$4.50",
+        "description": "Flaky layered flatbread."
+      }
+    ]
+  },
+  {
+    "id": "desserts",
+    "title": "Desserts & drinks",
+    "items": [
+      {
+        "name": "Gulab Jamun",
+        "price": "$8.90",
+        "description": ""
+      },
+      {
+        "name": "Gulab Jamun with Ice Cream",
+        "price": "$9.90",
+        "description": ""
+      },
+      {
+        "name": "Pistachio Kulfi",
+        "price": "$9.90",
+        "description": ""
+      },
+      {
+        "name": "Falooda",
+        "price": "$12.90",
+        "description": "Vermicelli, rose syrup, sabza seed and ice cream."
+      },
+      {
+        "name": "Chennai Palace\u2019s Jigar Thanda",
+        "price": "$12.90",
+        "description": "Almond gum, rabri ice cream and Nannari syrup."
+      },
+      {
+        "name": "South Indian Filter Coffee",
+        "price": "$4.00",
+        "description": ""
+      },
+      {
+        "name": "Masala Tea (Chai)",
+        "price": "$4.00",
+        "description": ""
+      },
+      {
+        "name": "Mango Lassi",
+        "price": "$6.90",
+        "description": ""
+      }
+    ]
+  }
+]
