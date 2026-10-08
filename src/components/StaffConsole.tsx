@@ -18,6 +18,7 @@ import {
   RefreshCw,
   Search,
   LayoutDashboard,
+  Grid3X3,
 } from "lucide-react";
 import { api, send } from "@/lib/client-api";
 import {
@@ -26,9 +27,10 @@ import {
   type MenuItem,
   type Cashier,
   type TableSession,
+  type RestaurantTable,
   type Order,
 } from "@/lib/types";
-type Tab = "orders" | "menu" | "cashiers" | "history";
+type Tab = "orders" | "menu" | "tables" | "cashiers" | "history";
 type MenuDraft = {
   version?: number;
   id?: string;
@@ -84,6 +86,10 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
   const [history, setHistory] = useState<TableSession[]>([]);
   const [menu, setMenu] = useState<MenuItem[]>([]);
   const [cashiers, setCashiers] = useState<Cashier[]>([]);
+  const [configuredTables, setConfiguredTables] = useState<RestaurantTable[]>(
+    [],
+  );
+  const [tableDraft, setTableDraft] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("All categories");
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
@@ -128,11 +134,14 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
     }
   }, []);
   const loadAdmin = useCallback(async () => {
-    const data = await api<{ menu: MenuItem[]; cashiers: Cashier[] }>(
-      "/api/admin",
-    );
+    const data = await api<{
+      menu: MenuItem[];
+      cashiers: Cashier[];
+      tables: RestaurantTable[];
+    }>("/api/admin");
     setMenu(data.menu);
     setCashiers(data.cashiers);
+    setConfiguredTables(data.tables);
   }, []);
   useEffect(() => {
     if (!user) return;
@@ -145,7 +154,10 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
     const source = new EventSource("/api/events");
     const changed = () => {
       void update();
-      if (user.role === "admin" && (tab === "menu" || tab === "cashiers"))
+      if (
+        user.role === "admin" &&
+        (tab === "menu" || tab === "tables" || tab === "cashiers")
+      )
         void loadAdmin().catch((e) => {
           if (active) setError(e.message);
         });
@@ -187,7 +199,7 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
   }, [user, refresh, loadAdmin, tab]);
   useEffect(() => {
     if (!user) return;
-    if (tab === "menu" || tab === "cashiers")
+    if (tab === "menu" || tab === "tables" || tab === "cashiers")
       loadAdmin().catch((e) => setError(e.message));
     if (tab === "history")
       api<TableSession[]>("/api/operations?history=1")
@@ -216,6 +228,7 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
       setTables([]);
       setMenu([]);
       setCashiers([]);
+      setConfiguredTables([]);
       setHistory([]);
       setTab("orders");
       setNotice("");
@@ -312,7 +325,48 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
       setBusy(false);
     }
   }
-  const modalOpen = Boolean(menuDraft || cashierDraft || closing);
+  async function saveTable(e: FormEvent) {
+    e.preventDefault();
+    if (tableDraft === null) return;
+    setBusy(true);
+    setError("");
+    try {
+      await send("/api/admin", {
+        kind: "table",
+        number: Number(tableDraft),
+        active: true,
+      });
+      setTableDraft(null);
+      setNotice("Table saved. Customers can select it now.");
+      await loadAdmin();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function toggleTable(table: RestaurantTable) {
+    setActionBusy(`table-${table.number}`);
+    setError("");
+    try {
+      await send("/api/admin", {
+        kind: "table",
+        number: table.number,
+        active: !table.active,
+      });
+      setNotice(
+        `Table ${table.number} ${table.active ? "hidden from" : "available to"} customers.`,
+      );
+      await loadAdmin();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setActionBusy("");
+    }
+  }
+  const modalOpen = Boolean(
+    menuDraft || cashierDraft || tableDraft !== null || closing,
+  );
   useEffect(() => {
     if (!modalOpen) return;
     const previous = document.activeElement as HTMLElement | null;
@@ -328,6 +382,7 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
       if (event.key === "Escape" && !busy) {
         setMenuDraft(null);
         setCashierDraft(null);
+        setTableDraft(null);
         setClosing(null);
       }
       if (event.key === "Tab") {
@@ -551,6 +606,13 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
                 <Users size={19} />
                 Cashier accounts
               </button>
+              <button
+                className={tab === "tables" ? "selected" : ""}
+                onClick={() => setTab("tables")}
+              >
+                <Grid3X3 size={19} />
+                Dining tables
+              </button>
             </>
           )}
           <button
@@ -593,7 +655,9 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
                     ? "YOUR RESTAURANT MENU"
                     : tab === "cashiers"
                       ? "YOUR FRONT OF HOUSE TEAM"
-                      : "SERVICE RECORDS"}
+                      : tab === "tables"
+                        ? "YOUR DINING ROOM"
+                        : "SERVICE RECORDS"}
               </span>
               <h1>
                 {tab === "orders"
@@ -602,7 +666,9 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
                     ? "Menu & stock"
                     : tab === "cashiers"
                       ? "Cashier accounts"
-                      : "Closed sessions"}
+                      : tab === "tables"
+                        ? "Dining tables"
+                        : "Closed sessions"}
               </h1>
               <p>
                 {tab === "orders"
@@ -611,7 +677,9 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
                     ? "Update dishes, availability and where each kitchen ticket goes."
                     : tab === "cashiers"
                       ? "Create cashier access with a four digit PIN and four digit password."
-                      : "Review the last 100 closed table sessions and their accepted orders."}
+                      : tab === "tables"
+                        ? "Choose which table numbers customers can order from."
+                        : "Review the last 100 closed table sessions and their accepted orders."}
               </p>
             </div>
             {tab === "orders" ? (
@@ -637,6 +705,11 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
               >
                 <Plus size={17} />
                 Add cashier
+              </button>
+            ) : tab === "tables" ? (
+              <button className="ops-button" onClick={() => setTableDraft("")}>
+                <Plus size={17} />
+                Add table
               </button>
             ) : null}
           </div>
@@ -899,6 +972,57 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
               </p>
             </section>
           )}
+          {tab === "tables" && (
+            <section className="ops-panel">
+              <div className="ops-panel-heading">
+                <h2>Configured tables</h2>
+                <span>
+                  {configuredTables.filter((table) => table.active).length}{" "}
+                  available
+                </span>
+              </div>
+              {configuredTables.length ? (
+                <div className="ops-config-grid">
+                  {configuredTables.map((table) => (
+                    <article className="ops-config-table" key={table.number}>
+                      <Grid3X3 size={20} />
+                      <div>
+                        <strong>Table {table.number}</strong>
+                        <span>
+                          {table.active
+                            ? "Available for orders"
+                            : "Hidden from customers"}
+                        </span>
+                      </div>
+                      <button
+                        className="ops-button secondary small"
+                        disabled={Boolean(actionBusy)}
+                        onClick={() => toggleTable(table)}
+                      >
+                        {actionBusy === `table-${table.number}`
+                          ? "Saving…"
+                          : table.active
+                            ? "Hide"
+                            : "Enable"}
+                      </button>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <div className="ops-empty">
+                  <Grid3X3 size={30} />
+                  <h3>Add your first table</h3>
+                  <p>
+                    Customers can order once at least one table is available.
+                  </p>
+                </div>
+              )}
+              <p className="ops-muted">
+                Hiding a table stops new orders at that number. Existing orders
+                and table history remain available.
+              </p>
+            </section>
+          )}
           {tab === "cashiers" && (
             <section className="ops-panel">
               <div className="ops-panel-heading">
@@ -971,6 +1095,50 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
           )}
         </div>
       </div>
+      {tableDraft !== null && (
+        <div className="ops-modal-overlay">
+          <section
+            className="ops-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="table-dialog"
+          >
+            <div className="ops-modal-heading">
+              <h2 id="table-dialog">Add dining table</h2>
+              <button
+                aria-label="Close editor"
+                disabled={busy}
+                onClick={() => setTableDraft(null)}
+              >
+                ×
+              </button>
+            </div>
+            <form onSubmit={saveTable}>
+              <label className="ops-field">
+                Table number
+                <input
+                  type="number"
+                  min="1"
+                  max="999"
+                  step="1"
+                  required
+                  autoFocus
+                  value={tableDraft}
+                  onChange={(e) => setTableDraft(e.target.value)}
+                />
+              </label>
+              {error && (
+                <div role="alert" className="ops-alert">
+                  {error}
+                </div>
+              )}
+              <button className="ops-button full" disabled={busy}>
+                {busy ? "Saving…" : "Add table"}
+              </button>
+            </form>
+          </section>
+        </div>
+      )}
       {menuDraft && (
         <div className="ops-modal-overlay">
           <section

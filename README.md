@@ -115,10 +115,13 @@ Run `npm run db:setup` to create the dedicated `palace` schema and seed the exis
 52 dishes in an empty menu. It is safe to run again; existing menu data is preserved.
 `DATABASE_URL_UNPOOLED`, when provided, is used for setup only.
 
-- `/order`: customer orders with a table number (1–999). `/order?table=12` prefills
-  a table number and can be used as a table QR-code destination.
+- `/order`: customers select an available table number and place an order. The
+  receipt shows their saved items, prices, total and live acceptance status, even
+  after reloading the page. `/order?table=12` prefills a configured, active table
+  and can be used as a table QR-code destination.
 - `/admin`: sign in with `SUPERADMIN_PASSWORD`. Manage dishes, AUD prices, categories,
-  descriptions, stock, visibility and each item's KOT destination. Create cashiers
+  descriptions, stock, visibility and each item's KOT destination. Add table numbers
+  from **Dining tables** and hide or re-enable them as needed. Create cashiers
   with a unique 4 digit login PIN and 4 digit password, including leading zeroes.
 - `/cashier`: sign in using the cashier PIN and password. Accept/reject orders,
   view table totals, reopen KOT PDFs, and close a session after manual billing.
@@ -130,6 +133,9 @@ means sold out. Rejected orders do not reduce stock or affect the total. Each or
 retains its submitted price and printer destination even when the menu is edited.
 Multiple orders for a table share one open session. Pending orders must be accepted
 or rejected before closing; the next order at a closed table starts a new session.
+The customer who starts a table session can order more from the same browser;
+other customers see that table as in use and cannot submit orders for it until
+the cashier closes the session.
 Closed sessions and their order snapshots remain available in the staff history.
 Closing also checks the displayed total and order count, so changes during manual
 billing require the cashier to review the table again.

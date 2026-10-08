@@ -13,13 +13,20 @@ export const runtime = "nodejs";
 export async function GET() {
   try {
     await staff(true);
-    const [menu, cashiers] = await Promise.all([
+    const [menu, cashiers, tables] = await Promise.all([
       db().query("SELECT * FROM palace.menu_items ORDER BY sort_order,name"),
       db().query(
         "SELECT id,name,pin,active FROM palace.cashiers ORDER BY created_at",
       ),
+      db().query(
+        "SELECT number,active FROM palace.restaurant_tables ORDER BY number",
+      ),
     ]);
-    return json({ menu: menu.rows, cashiers: cashiers.rows });
+    return json({
+      menu: menu.rows,
+      cashiers: cashiers.rows,
+      tables: tables.rows,
+    });
   } catch (error) {
     return failure(error);
   }
@@ -94,6 +101,19 @@ export async function POST(request: Request) {
           "INSERT INTO palace.menu_items(name,category,description,price_cents,printer,stock,active,id,sort_order) VALUES($1,$2,$3,$4,$5,$6,$7,$8,(SELECT COALESCE(max(sort_order),0)+1 FROM palace.menu_items))",
           [...params, randomUUID()],
         );
+    } else if (data.kind === "table") {
+      assert(
+        Number.isInteger(data.number) &&
+          Number(data.number) >= 1 &&
+          Number(data.number) <= 999,
+        "Choose a table number from 1 to 999.",
+      );
+      assert(typeof data.active === "boolean", "Invalid table status.");
+      await db().query(
+        `INSERT INTO palace.restaurant_tables(number,active) VALUES($1,$2)
+         ON CONFLICT(number) DO UPDATE SET active=EXCLUDED.active`,
+        [data.number, data.active],
+      );
     } else if (data.kind === "cashier") {
       assert(data.id === undefined || uuid(data.id), "Invalid cashier.");
       assert(

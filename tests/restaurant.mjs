@@ -13,18 +13,21 @@ const createdItems = [];
 const orderIds = [];
 const sessionIds = [];
 let cashierId;
+let table;
+let browserTable;
 let adminCookie = "";
 let cashierCookie = "";
 let browser;
 async function call(
   url,
-  { method = "GET", data, cookie, expected = 200 } = {},
+  { method = "GET", data, cookie, customerToken, expected = 200 } = {},
 ) {
   const res = await fetch(base + url, {
     method,
     headers: {
       "Content-Type": "application/json",
       ...(cookie ? { Cookie: cookie } : {}),
+      ...(customerToken ? { "X-Customer-Token": customerToken } : {}),
     },
     ...(data ? { body: JSON.stringify(data) } : {}),
   });
@@ -40,17 +43,50 @@ try {
   await client.connect();
   // Select an unused table; cleanup only removes records created by this test.
   const occupied = await client.query(
-    "SELECT DISTINCT table_number FROM palace.table_sessions",
+    "SELECT table_number FROM palace.table_sessions UNION SELECT number FROM palace.restaurant_tables",
   );
-  const table = Array.from({ length: 99 }, (_, i) => 999 - i).find(
+  table = Array.from({ length: 99 }, (_, i) => 999 - i).find(
     (t) => !occupied.rows.some((r) => r.table_number === t),
   );
   assert.ok(table, "An unused test table is required.");
+  browserTable = Array.from({ length: 99 }, (_, i) => 999 - i).find(
+    (number) =>
+      number !== table && !occupied.rows.some((r) => r.table_number === number),
+  );
+  assert.ok(browserTable, "A second unused test table is required.");
+  const unconfiguredTable = Array.from({ length: 999 }, (_, i) => i + 1).find(
+    (number) =>
+      number !== table &&
+      number !== browserTable &&
+      !occupied.rows.some((r) => r.table_number === number),
+  );
+  assert.ok(unconfiguredTable, "An unconfigured test table is required.");
   const login = await call("/api/auth", {
     method: "POST",
     data: { role: "admin", password: process.env.SUPERADMIN_PASSWORD },
   });
   adminCookie = login.cookie;
+  assert.ok(!(await call("/api/tables")).value.some((t) => t.number === table));
+  await call("/api/admin", {
+    method: "POST",
+    cookie: adminCookie,
+    data: { kind: "table", number: table, active: true },
+  });
+  await call("/api/admin", {
+    method: "POST",
+    cookie: adminCookie,
+    data: { kind: "table", number: browserTable, active: true },
+  });
+  assert.ok(
+    (await call("/api/tables")).value.some(
+      (t) => t.number === table && t.status === "available",
+    ),
+  );
+  assert.ok(
+    (await call("/api/admin", { cookie: adminCookie })).value.tables.some(
+      (t) => t.number === table && t.active,
+    ),
+  );
   await call("/api/admin", { expected: 401 });
   await call("/api/operations", { expected: 401 });
   await call("/api/events", { expected: 401 });
@@ -105,6 +141,12 @@ try {
   await call("/api/admin", {
     method: "POST",
     cookie: cashierCookie,
+    data: { kind: "table", number: table, active: false },
+    expected: 403,
+  });
+  await call("/api/admin", {
+    method: "POST",
+    cookie: cashierCookie,
     data: { kind: "menu" },
     expected: 403,
   });
@@ -128,8 +170,38 @@ try {
       { id: counter, quantity: 1 },
     ],
   };
+  await call("/api/orders", {
+    method: "POST",
+    data: { ...data, table_number: unconfiguredTable },
+    expected: 409,
+  });
   const first = (await call("/api/orders", { method: "POST", data })).value;
   orderIds.push(first.id);
+  assert.equal(
+    (await call("/api/tables")).value.find((t) => t.number === table).status,
+    "occupied",
+  );
+  assert.equal(
+    (await call("/api/tables", { customerToken: token })).value.find(
+      (t) => t.number === table,
+    ).status,
+    "yours",
+  );
+  await call("/api/orders", {
+    method: "POST",
+    data: { ...data, request_key: randomUUID(), tracking_token: randomUUID() },
+    expected: 409,
+  });
+  await call("/api/orders", {
+    method: "POST",
+    data: {
+      ...data,
+      request_key: randomUUID(),
+      tracking_token: randomUUID(),
+      customer_token: randomUUID(),
+    },
+    expected: 409,
+  });
   const replay = (await call("/api/orders", { method: "POST", data })).value;
   assert.equal(first.id, replay.id);
   await call("/api/orders", {
@@ -143,6 +215,36 @@ try {
   const tracking = (await call(`/api/orders?id=${first.id}&token=${token}`))
     .value;
   assert.equal(tracking.status, "pending");
+  assert.equal(tracking.total_cents, 2450);
+  assert.deepEqual(
+    tracking.items
+      .map((item) => [item.name, item.quantity, item.price_cents])
+      .sort(),
+    [
+      [`${prefix} counter`, 1, 450],
+      [`${prefix} kitchen`, 2, 1000],
+    ].sort(),
+  );
+  await call("/api/admin", {
+    method: "POST",
+    cookie: adminCookie,
+    data: { kind: "table", number: table, active: false },
+  });
+  assert.ok(!(await call("/api/tables")).value.some((t) => t.number === table));
+  await call("/api/orders", {
+    method: "POST",
+    data: { ...data, request_key: randomUUID() },
+    expected: 409,
+  });
+  assert.equal(
+    (await call("/api/orders", { method: "POST", data })).value.id,
+    first.id,
+  );
+  await call("/api/admin", {
+    method: "POST",
+    cookie: adminCookie,
+    data: { kind: "table", number: table, active: true },
+  });
   let sessions = (await call("/api/operations", { cookie: cashierCookie }))
     .value;
   let session = sessions.find((s) => s.table_number === table);
@@ -241,6 +343,7 @@ try {
   assert.deepEqual(snapshot, { price_cents: 1000, printer: "kitchen" });
   const nextData = {
     ...data,
+    customer_token: token,
     request_key: randomUUID(),
     tracking_token: randomUUID(),
     items: [{ id: kitchen, quantity: 3 }],
@@ -296,6 +399,10 @@ try {
   ).value.find((s) => s.id === session.id);
   assert.equal(history.total_cents, 2450);
   assert.ok(history.closed_at);
+  assert.equal(
+    (await call("/api/tables")).value.find((t) => t.number === table).status,
+    "available",
+  );
   const third = (
     await call("/api/orders", {
       method: "POST",
@@ -335,6 +442,8 @@ try {
   await page.getByRole("button", { name: "Add dish" }).click();
   await page.getByRole("dialog").waitFor();
   await page.getByLabel("Close editor").click();
+  await page.getByRole("button", { name: "Dining tables" }).click();
+  await page.getByText(`Table ${table}`, { exact: true }).waitFor();
   await page.screenshot({ path: "/tmp/palace-admin.png", fullPage: true });
   await page.getByRole("button", { name: "Sign out" }).click();
   await page.getByRole("heading", { name: "Admin sign in" }).waitFor();
@@ -376,7 +485,7 @@ try {
     .waitFor();
   page = await browser.newPage({ viewport: { width: 390, height: 844 } });
   page.on("pageerror", (e) => errors.push(e.message));
-  await page.goto(base + "/order?table=" + table);
+  await page.goto(base + "/order?table=" + browserTable);
   await page.getByLabel("Search dishes", { exact: true }).fill(prefix);
   await page
     .getByRole("button", { name: `Add one ${prefix} counter`, exact: true })
@@ -385,15 +494,74 @@ try {
   await page.getByLabel("Table number", { exact: true }).waitFor();
   assert.equal(
     await page.getByLabel("Table number", { exact: true }).inputValue(),
-    String(table),
+    String(browserTable),
   );
   await page.getByRole("button", { name: "Send order to cashier" }).click();
   await page.getByText("Awaiting cashier", { exact: true }).waitFor();
+  await page.getByRole("heading", { name: "Your ordered items" }).waitFor();
+  await page.getByText(`1 × ${prefix} counter`).waitFor();
+  await page.reload();
+  await page.getByText(`1 × ${prefix} counter`).waitFor();
   const browserOrder = await page.evaluate(() =>
     JSON.parse(sessionStorage.getItem("palace_order")),
   );
   orderIds.push(browserOrder.id);
-  assert.equal(browserOrder.table, table);
+  assert.equal(browserOrder.table, browserTable);
+  sessionIds.push(
+    (
+      await client.query("SELECT session_id FROM palace.orders WHERE id=$1", [
+        browserOrder.id,
+      ])
+    ).rows[0].session_id,
+  );
+  const otherCustomer = await browser.newPage({
+    viewport: { width: 390, height: 844 },
+  });
+  await otherCustomer.goto(base + "/order?table=" + browserTable);
+  await otherCustomer.getByRole("button", { name: "View cart" }).click();
+  await otherCustomer
+    .getByRole("option", { name: `Table ${browserTable} · In use` })
+    .waitFor({ state: "attached" });
+  assert.equal(
+    await otherCustomer
+      .getByLabel("Table number", { exact: true })
+      .inputValue(),
+    "",
+  );
+  await otherCustomer.close();
+  const ownerSession = await page.evaluate(() =>
+    JSON.parse(sessionStorage.getItem("palace_customer_session")),
+  );
+  assert.equal(ownerSession.table, browserTable);
+  assert.equal(ownerSession.token, browserOrder.token);
+  assert.equal(
+    (
+      await call("/api/tables", { customerToken: ownerSession.token })
+    ).value.find((t) => t.number === browserTable).status,
+    "yours",
+  );
+  await page.getByRole("button", { name: "Order more dishes" }).click();
+  await page
+    .getByRole("button", { name: `Add one ${prefix} counter`, exact: true })
+    .click();
+  await page.getByRole("button", { name: "View cart" }).click();
+  await page.waitForFunction(
+    (number) =>
+      document.querySelector('select[aria-label="Table number"]')?.value ===
+      String(number),
+    browserTable,
+  );
+  assert.equal(
+    await page.getByLabel("Table number", { exact: true }).inputValue(),
+    String(browserTable),
+  );
+  await page.getByRole("button", { name: "Send order to cashier" }).click();
+  await page.getByText("Awaiting cashier", { exact: true }).waitFor();
+  const followupOrder = await page.evaluate(() =>
+    JSON.parse(sessionStorage.getItem("palace_order")),
+  );
+  orderIds.push(followupOrder.id);
+  assert.notEqual(followupOrder.id, browserOrder.id);
   await cashierPage
     .getByText(`#${browserOrder.id.slice(0, 8).toUpperCase()}`, { exact: true })
     .waitFor({ timeout: 4000 });
@@ -444,6 +612,11 @@ try {
     await client.query(
       "DELETE FROM palace.table_sessions WHERE id=ANY($1::uuid[])",
       [sessionIds],
+    );
+  if (table || browserTable)
+    await client.query(
+      "DELETE FROM palace.restaurant_tables WHERE number=ANY($1::int[])",
+      [[table, browserTable].filter(Boolean)],
     );
   if (createdItems.length)
     await client.query(

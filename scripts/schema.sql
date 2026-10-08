@@ -20,6 +20,13 @@ CREATE TABLE IF NOT EXISTS palace.table_sessions (
  opened_at timestamptz NOT NULL DEFAULT now(), closed_at timestamptz, closed_by text
 );
 CREATE UNIQUE INDEX IF NOT EXISTS one_open_session_per_table ON palace.table_sessions(table_number) WHERE closed_at IS NULL;
+CREATE TABLE IF NOT EXISTS palace.restaurant_tables (
+ number integer PRIMARY KEY CHECK(number BETWEEN 1 AND 999),
+ active boolean NOT NULL DEFAULT true,
+ created_at timestamptz NOT NULL DEFAULT now()
+);
+INSERT INTO palace.restaurant_tables(number)
+ SELECT DISTINCT table_number FROM palace.table_sessions ON CONFLICT DO NOTHING;
 CREATE TABLE IF NOT EXISTS palace.orders (
  id uuid PRIMARY KEY, session_id uuid NOT NULL REFERENCES palace.table_sessions(id), request_key uuid NOT NULL UNIQUE,
  tracking_hash text NOT NULL, status text NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','accepted','rejected')),
@@ -30,6 +37,12 @@ CREATE TABLE IF NOT EXISTS palace.order_items (
  name text NOT NULL, price_cents integer NOT NULL CHECK(price_cents >= 0), quantity integer NOT NULL CHECK(quantity BETWEEN 1 AND 50),
  printer text NOT NULL CHECK(printer IN ('kitchen','cashier'))
 );
+ALTER TABLE palace.table_sessions ADD COLUMN IF NOT EXISTS customer_token_hash text;
+-- Existing open sessions belong to the customer holding their latest order receipt.
+UPDATE palace.table_sessions s SET customer_token_hash=(
+ SELECT o.tracking_hash FROM palace.orders o
+ WHERE o.session_id=s.id ORDER BY o.created_at DESC,o.id DESC LIMIT 1
+) WHERE s.closed_at IS NULL AND s.customer_token_hash IS NULL;
 CREATE INDEX IF NOT EXISTS orders_session_idx ON palace.orders(session_id);
 CREATE INDEX IF NOT EXISTS orders_pending_idx ON palace.orders(created_at) WHERE status='pending';
 CREATE INDEX IF NOT EXISTS order_items_order_idx ON palace.order_items(order_id);
@@ -54,6 +67,9 @@ CREATE TRIGGER live_change AFTER INSERT OR UPDATE OR DELETE ON palace.table_sess
  FOR EACH STATEMENT EXECUTE FUNCTION palace.notify_change();
 DROP TRIGGER IF EXISTS live_change ON palace.menu_items;
 CREATE TRIGGER live_change AFTER INSERT OR UPDATE OR DELETE ON palace.menu_items
+ FOR EACH STATEMENT EXECUTE FUNCTION palace.notify_change();
+DROP TRIGGER IF EXISTS live_change ON palace.restaurant_tables;
+CREATE TRIGGER live_change AFTER INSERT OR UPDATE OR DELETE ON palace.restaurant_tables
  FOR EACH STATEMENT EXECUTE FUNCTION palace.notify_change();
 
 -- Prevent an old admin form from overwriting stock deducted during service.

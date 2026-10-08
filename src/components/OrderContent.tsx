@@ -14,11 +14,27 @@ import {
 import { api, send } from "@/lib/client-api";
 import { money, type MenuItem } from "@/lib/types";
 type Receipt = { id: string; token: string; table: number };
+type TableChoice = {
+  number: number;
+  status: "available" | "yours" | "occupied";
+};
+type CustomerSession = { table: number; token: string };
+type TrackedOrder = {
+  status: string;
+  closed_at: string | null;
+  items: { name: string; quantity: number; price_cents: number }[];
+  total_cents: number;
+};
 export default function OrderContent() {
   const [menu, setMenu] = useState<MenuItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [table, setTable] = useState("");
+  const [availableTables, setAvailableTables] = useState<TableChoice[]>([]);
+  const [customerSession, setCustomerSession] =
+    useState<CustomerSession | null>(null);
+  const [tablesLoading, setTablesLoading] = useState(true);
+  const [restored, setRestored] = useState(false);
   const [cart, setCart] = useState<Record<string, number>>({});
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("All dishes");
@@ -27,6 +43,7 @@ export default function OrderContent() {
   const [receipt, setReceipt] = useState<Receipt | null>(null);
   const [status, setStatus] = useState("pending");
   const [closed, setClosed] = useState(false);
+  const [trackedOrder, setTrackedOrder] = useState<TrackedOrder | null>(null);
   const [cartOpen, setCartOpen] = useState(false);
   const request = useRef<{ key: string; token: string } | null>(null);
   const cartRef = useRef<HTMLElement>(null);
@@ -46,7 +63,7 @@ export default function OrderContent() {
       if (event.key !== "Tab") return;
       const targets = Array.from(
         cartRef.current?.querySelectorAll<HTMLElement>(
-          "button:not(:disabled), input:not(:disabled), textarea:not(:disabled), a[href]",
+          "button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href]",
         ) || [],
       );
       const first = targets[0];
@@ -81,7 +98,14 @@ export default function OrderContent() {
         if (!params.get("item")) setReceipt(value);
         setTable(String(value.table));
       }
+      const savedSession = sessionStorage.getItem("palace_customer_session");
+      if (savedSession) {
+        const value = JSON.parse(savedSession);
+        if (Number.isInteger(value.table) && typeof value.token === "string")
+          setCustomerSession(value);
+      }
     } catch {}
+    setRestored(true);
     api<MenuItem[]>("/api/menu")
       .then((items) => {
         setMenu(items);
@@ -108,13 +132,12 @@ export default function OrderContent() {
     if (!receipt) return;
     let active = true;
     const update = () =>
-      api<{ status: string; closed_at: string | null }>(
-        `/api/orders?id=${receipt.id}&token=${receipt.token}`,
-      )
+      api<TrackedOrder>(`/api/orders?id=${receipt.id}&token=${receipt.token}`)
         .then((data) => {
           if (active) {
             setStatus(data.status);
             setClosed(Boolean(data.closed_at));
+            setTrackedOrder(data);
             setError("");
           }
         })
@@ -129,21 +152,54 @@ export default function OrderContent() {
     };
   }, [receipt]);
   useEffect(() => {
-    if (receipt) return;
+    if (!restored || receipt) return;
     let active = true;
-    const timer = setInterval(() => {
+    const refresh = () => {
       if (document.hidden) return;
       api<MenuItem[]>("/api/menu")
         .then((data) => {
           if (active) setMenu(data);
         })
         .catch(() => {});
-    }, 5000);
+      api<TableChoice[]>("/api/tables", {
+        headers: customerSession
+          ? { "X-Customer-Token": customerSession.token }
+          : {},
+      })
+        .then((choices) => {
+          if (active) {
+            setAvailableTables(choices);
+            setTable((current) =>
+              choices.some(
+                (choice) =>
+                  choice.number === Number(current) &&
+                  choice.status !== "occupied",
+              )
+                ? current
+                : String(
+                    choices.find(
+                      (choice) =>
+                        choice.status === "yours" &&
+                        choice.number === customerSession?.table,
+                    )?.number || "",
+                  ),
+            );
+          }
+        })
+        .catch((e) => {
+          if (active) setError(e.message);
+        })
+        .finally(() => {
+          if (active) setTablesLoading(false);
+        });
+    };
+    refresh();
+    const timer = setInterval(refresh, 5000);
     return () => {
       active = false;
       clearInterval(timer);
     };
-  }, [receipt]);
+  }, [receipt, customerSession, restored]);
   const change = (id: string, quantity: number) => {
     request.current = null;
     setCart((c) => ({ ...c, [id]: Math.max(0, Math.min(50, quantity)) }));
@@ -154,6 +210,12 @@ export default function OrderContent() {
     0,
   );
   const count = selected.reduce((sum, item) => sum + cart[item.id], 0);
+  const selectedTable = availableTables.find(
+    (choice) => choice.number === Number(table),
+  );
+  const canUseTable = Boolean(
+    selectedTable && selectedTable.status !== "occupied",
+  );
   const available = menu.filter((item) => item.stock !== 0);
   const featured = ["Masala Dosa", "Butter Chicken", "Chicken Biryani"]
     .map((name) => available.find((item) => item.name === name))
@@ -189,6 +251,10 @@ export default function OrderContent() {
         .includes(query.trim().toLowerCase()),
   );
   async function placeOrder() {
+    if (!canUseTable) {
+      setError("Please choose an available table.");
+      return;
+    }
     setBusy(true);
     setError("");
     try {
@@ -203,6 +269,10 @@ export default function OrderContent() {
         notes,
         request_key: request.current.key,
         tracking_token: request.current.token,
+        ...(selectedTable?.status === "yours" &&
+        customerSession?.table === Number(table)
+          ? { customer_token: customerSession.token }
+          : {}),
       });
       const value = {
         id: data.id,
@@ -213,6 +283,17 @@ export default function OrderContent() {
       setCartOpen(false);
       setStatus("pending");
       setClosed(false);
+      setTrackedOrder(null);
+      if (selectedTable?.status !== "yours") {
+        const owner = { table: Number(table), token: request.current.token };
+        setCustomerSession(owner);
+        try {
+          sessionStorage.setItem(
+            "palace_customer_session",
+            JSON.stringify(owner),
+          );
+        } catch {}
+      }
       try {
         sessionStorage.setItem("palace_order", JSON.stringify(value));
       } catch {}
@@ -226,8 +307,14 @@ export default function OrderContent() {
     }
   }
   function anotherOrder() {
+    if (receipt && !closed) setTable(String(receipt.table));
     setReceipt(null);
+    setTrackedOrder(null);
     sessionStorage.removeItem("palace_order");
+    if (closed) {
+      setCustomerSession(null);
+      sessionStorage.removeItem("palace_customer_session");
+    }
     api<MenuItem[]>("/api/menu")
       .then(setMenu)
       .catch((e) => setError(e.message));
@@ -296,6 +383,27 @@ export default function OrderContent() {
                   ? "Your order is confirmed and your KOT is ready for the team. Enjoy your meal."
                   : "Please speak to the cashier about availability or place a new order."}
           </p>
+          <div className="order-receipt-items">
+            <h3>Your ordered items</h3>
+            {trackedOrder ? (
+              <>
+                {trackedOrder.items.map((item, index) => (
+                  <div className="cart-line" key={`${item.name}-${index}`}>
+                    <span>
+                      {item.quantity} × {item.name}
+                    </span>
+                    <strong>{money(item.price_cents * item.quantity)}</strong>
+                  </div>
+                ))}
+                <div className="cart-total">
+                  <span>Order total</span>
+                  <strong>{money(trackedOrder.total_cents)}</strong>
+                </div>
+              </>
+            ) : (
+              <p>Loading your ordered items…</p>
+            )}
+          </div>
           <button className="button" onClick={anotherOrder}>
             {" "}
             {closed ? "Start a new order" : "Order more dishes"}
@@ -511,19 +619,43 @@ export default function OrderContent() {
             )}
             <label className="ops-field">
               Table number
-              <input
-                type="number"
-                min="1"
-                max="999"
+              <select
+                aria-label="Table number"
                 required
                 value={table}
+                disabled={tablesLoading || availableTables.length === 0}
                 onChange={(e) => {
                   setTable(e.target.value);
                   request.current = null;
                 }}
-                placeholder="e.g. 12"
-              />
+              >
+                <option value="">
+                  {tablesLoading ? "Loading tables…" : "Select your table"}
+                </option>
+                {availableTables.map((choice) => (
+                  <option
+                    key={choice.number}
+                    value={choice.number}
+                    disabled={choice.status === "occupied"}
+                  >
+                    Table {choice.number}
+                    {choice.status === "occupied"
+                      ? " · In use"
+                      : choice.status === "yours"
+                        ? " · Your table"
+                        : ""}
+                  </option>
+                ))}
+              </select>
             </label>
+            {!tablesLoading &&
+              !availableTables.some(
+                (choice) => choice.status !== "occupied",
+              ) && (
+                <p className="order-fine">
+                  No tables are available. Please ask the cashier.
+                </p>
+              )}
             {selected.length === 0 ? (
               <p className="order-cart-empty">
                 Choose a dish from the menu to get started.
@@ -588,13 +720,7 @@ export default function OrderContent() {
               </div>
               <button
                 className="button"
-                disabled={
-                  busy ||
-                  !selected.length ||
-                  !/^\d+$/.test(table) ||
-                  Number(table) < 1 ||
-                  Number(table) > 999
-                }
+                disabled={busy || !selected.length || !canUseTable}
                 onClick={placeOrder}
               >
                 {busy ? "Sending order…" : "Send order to cashier"}

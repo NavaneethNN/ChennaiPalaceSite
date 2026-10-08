@@ -887,6 +887,46 @@ button:disabled {
   margin: 12px 0;
   border-radius: 5px;
 }
+.order-receipt-items {
+  margin: 24px 0 8px;
+  padding: 18px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.order-receipt-items h3 {
+  margin: 0 0 12px;
+  font-size: 17px;
+}
+.order-receipt-items .cart-total {
+  margin-top: 14px;
+}
+.ops-config-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 14px;
+}
+.ops-config-table {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: white;
+}
+.ops-config-table > div {
+  display: grid;
+  gap: 3px;
+  flex: 1;
+}
+.ops-config-table strong {
+  font-size: 16px;
+}
+.ops-config-table span {
+  font-size: 12px;
+  color: #777;
+}
 @media (min-width: 1800px) {
   .ops-content {
     padding: 45px;
