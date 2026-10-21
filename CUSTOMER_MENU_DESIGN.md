@@ -4,11 +4,12 @@ The customer flow now moves from `/menu` to `/order` with a chosen dish carried 
 
 ## Layout
 
-1. **Menu landing:** a clear table-order button in the hero, a small inspiration row using available dishes, then the searchable full menu. Every available dish has an Add action that opens the order screen with that dish selected.
-2. **Ordering start:** a short introduction, three example dishes with visible prices, then search and category filters. The filters remain accessible while scrolling through a long menu.
-3. **Cart:** an always-visible total on desktop. On mobile, a bottom bar shows the item count and total and opens the cart. The table number, notes, total, and send action sit together at the final decision point.
-4. **Relevant additions:** after a diner selects food, the cart suggests up to two available, unselected items. Curries prompt bread or rice; dosa prompts a drink; biryani prompts a drink. The diner adds each item explicitly, and its price is shown first.
-5. **Checkout:** the customer sees an estimated total and sends the order for cashier acceptance. Billing and payment remain at the cashier.
+1. **Menu landing:** a compact heading and table-order button, followed immediately by the searchable full menu. Inspiration appears after the dishes. Every available dish has an Add action that opens the order screen with that dish selected.
+2. **Ordering start:** a compact heading, search and category filters, and dishes visible without scrolling on phone, tablet and desktop. The filters remain accessible while scrolling through a long menu.
+3. **Adding dishes:** an explicit Add button becomes a quantity control. Selected rows are highlighted, with an “In your order” label, a brief accessible confirmation and animated counts. Reduced-motion preferences disable the animations. Stock and the 50-item limit apply to each addition.
+4. **Cart:** an always-visible total on desktop. On mobile, a bottom bar shows the item count and total and opens the cart. The table number, notes, total, and send action sit together at the final decision point.
+5. **Relevant additions:** after a diner selects food, the cart suggests up to two available, unselected items. Curries prompt bread or rice; dosa prompts a drink; biryani prompts a drink. The diner adds each item explicitly, and its price is shown first.
+6. **Checkout:** the customer sees an estimated total and sends the order for cashier acceptance. Billing and payment remain at the cashier.
 
 ## Trust and accuracy
 

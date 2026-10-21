@@ -123,6 +123,8 @@ Run `npm run db:setup` to create the dedicated `palace` schema and seed the exis
   descriptions, stock, visibility and each item's KOT destination. Add table numbers
   from **Dining tables** and hide or re-enable them as needed. Create cashiers
   with a unique 4 digit login PIN and 4 digit password, including leading zeroes.
+  Configure **Printers** to detect connected Windows receipt printers and assign one
+  printer for the kitchen and one for the cashier counter.
 - `/cashier`: sign in using the cashier PIN and password. Accept/reject orders,
   view table totals, reopen KOT PDFs, and close a session after manual billing.
   Cashiers cannot access menu, stock or account administration.
@@ -142,11 +144,41 @@ billing require the cashier to review the table again.
 
 Acceptance opens a printable, receipt-width KOT PDF in a new browser tab. The
 combined PDF has one section/page per destination that has items, labeled Kitchen
-or Cashier, with table, order, time, quantities and customer notes. Separate PDF
-links let the cashier print only the relevant destination. Allow popups for this
-site to open KOTs automatically. PDF links remain available if popups are blocked.
-Physical printer routing and silent printing are not connected yet. Billing and
-payments remain external; KOTs are not tax invoices.
+or Cashier, with table, order, time, quantities, customer notes, and the configured
+printer name. Separate PDF links let the cashier print only the relevant destination.
+Allow popups for this site to open KOTs automatically. PDF links remain available
+if popups are blocked.
+
+### Windows 2-Printer Hardware & Automatic Paper Sizing
+
+When 2 thermal receipt printers are connected to the same Windows system (via USB or network):
+1. In the **Admin** panel, navigate to the **Printers** section.
+2. Click **Scan Windows printers** to query Windows (PowerShell/CIM) for installed printer names.
+   - If running locally on Windows, the server detects installed printers natively.
+   - If running remotely or in the cloud, run `scripts/windows-printer-bridge.bat` on the Windows machine
+     to expose a local bridge on `http://127.0.0.1:18080/printers` for one-click browser detection.
+   - Printers can also be selected from common presets (POS-80, POS-58, EPSON TM-T88, Star TSP100) or typed directly.
+3. Assign one printer as **Kitchen printer** and one as **Cashier printer**.
+4. Configure or auto-detect paper roll sizes:
+   - **80mm (Standard 3-inch roll)**: Generates full-width 226.77pt KOT slips with large kitchen typography and 24-character item columns.
+   - **58mm (Compact 2-inch roll)**: Automatically reduces width to 164.41pt, tightens margins, and scales font sizes and line wrapping (16-character columns) to fit smaller rolls without truncation.
+   - Paper size is automatically inferred from printer names (e.g. `POS-58` → 58mm, `POS-80` → 80mm) and can also be explicitly selected.
+5. Click **Save printer configuration**.
+6. Use **Test kitchen slip ↗** and **Test cashier slip ↗** to verify print output on both devices.
+7. Dishes configured with "Kitchen printer" route to the kitchen printer, while drinks, desserts, and
+   counter items configured with "Cashier table printer" route to the cashier printer. Both order
+   cards and KOT PDFs display the assigned physical printer and formatted paper size.
+
+### High-Speed Continuous Printing Engine
+
+During busy restaurant service with multiple orders arriving simultaneously:
+- **Zero Browser Pop-up Blocking**: Acceptance dispatches print jobs directly to the sequential print engine (`enqueueOrderPrint`). No browser popup tabs are opened, preventing Chrome/Edge from blocking tabs when 10+ orders are accepted in rapid succession.
+- **Direct Hardware Printing**: When `windows-printer-bridge.bat` is running on the Windows POS machine, print jobs are sent via high-speed text protocol directly to the Windows print spooler (`Out-Printer`) in under 100 milliseconds per ticket.
+- **Sequential FIFO Spooling**: Print jobs are queued and dispatched with rate-limited intervals (150ms) to prevent printer buffer conflicts or dropped tickets.
+- **Silent Background Fallback**: If the bridge is not running, jobs print smoothly via a background hidden iframe (`iframe.contentWindow.print()`).
+- **Live Status Badging & Reprinting**: Order cards show live print progress (`Printed ✓`, `Printing…`, or `Retry print ↻`). Any accepted order can be reprinted with one click via the **Reprint KOT** button if paper runs out.
+- **Auto-Print Toggle**: Cashiers can toggle **Auto-print KOT on accept** directly from the orders queue header.
+Billing and payments remain external; KOTs are not tax invoices.
 
 Staff sessions use HttpOnly cookies, expire after 12 hours, and are revoked when a
 cashier is disabled or their password is reset. Passwords are stored as salted

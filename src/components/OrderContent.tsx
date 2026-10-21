@@ -1,16 +1,18 @@
 "use client";
 import Link from "next/link";
-import Image from "next/image";
+import TableSelect from "@/components/TableSelect";
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowRight,
   ChevronUp,
+  Check,
   Plus,
   Search,
   ShoppingBag,
   Sparkles,
   X,
 } from "lucide-react";
+import { useCategoryScroll } from "@/lib/use-category-scroll";
 import { api, send } from "@/lib/client-api";
 import { money, type MenuItem } from "@/lib/types";
 type Receipt = { id: string; token: string; table: number };
@@ -25,19 +27,41 @@ type TrackedOrder = {
   items: { name: string; quantity: number; price_cents: number }[];
   total_cents: number;
 };
+type SessionHistory = {
+  id: string;
+  table: number;
+  closed_at: string | null;
+  orders: (Omit<TrackedOrder, "closed_at"> & {
+    id: string;
+    created_at: string;
+  })[];
+};
 export default function OrderContent() {
   const [menu, setMenu] = useState<MenuItem[]>([]);
+  const [menuUpdate, setMenuUpdate] = useState<MenuItem[] | null>(null);
+  const menuRef = useRef(menu);
+  useEffect(() => {
+    menuRef.current = menu;
+  }, [menu]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [table, setTable] = useState("");
   const [availableTables, setAvailableTables] = useState<TableChoice[]>([]);
   const [customerSession, setCustomerSession] =
     useState<CustomerSession | null>(null);
+  const [history, setHistory] = useState<SessionHistory | null>(null);
+  const [historyError, setHistoryError] = useState("");
+  const [historyRequested, setHistoryRequested] = useState(false);
   const [tablesLoading, setTablesLoading] = useState(true);
   const [restored, setRestored] = useState(false);
   const [cart, setCart] = useState<Record<string, number>>({});
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("All dishes");
+  const scrollCategory = useCategoryScroll(
+    category,
+    ".order-filters",
+    ".order-category, .order-no-results",
+  );
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
   const [receipt, setReceipt] = useState<Receipt | null>(null);
@@ -45,9 +69,39 @@ export default function OrderContent() {
   const [closed, setClosed] = useState(false);
   const [trackedOrder, setTrackedOrder] = useState<TrackedOrder | null>(null);
   const [cartOpen, setCartOpen] = useState(false);
+  const [added, setAdded] = useState<{ name: string; sequence: number } | null>(
+    null,
+  );
+  const feedbackSequence = useRef(0);
+  useEffect(() => {
+    if (!added) return;
+    const timer = window.setTimeout(() => setAdded(null), 2200);
+    return () => window.clearTimeout(timer);
+  }, [added]);
   const request = useRef<{ key: string; token: string } | null>(null);
   const cartRef = useRef<HTMLElement>(null);
   const cartTrigger = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    const panel = cartRef.current;
+    if (!panel) return;
+    const fitCart = () => {
+      panel.style.setProperty(
+        "--cart-available-height",
+        `${Math.max(320, window.innerHeight - panel.getBoundingClientRect().top - 16)}px`,
+      );
+    };
+    fitCart();
+    const observer = new ResizeObserver(fitCart);
+    observer.observe(document.querySelector(".order-page")!);
+    window.addEventListener("resize", fitCart);
+    window.addEventListener("scroll", fitCart, { passive: true });
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", fitCart);
+      window.removeEventListener("scroll", fitCart);
+    };
+  }, [receipt]);
+
   useEffect(() => {
     if (!cartOpen) return;
     const mobile = window.matchMedia("(max-width: 800px)");
@@ -57,8 +111,9 @@ export default function OrderContent() {
     document.body.style.overflow = "hidden";
     cartRef.current
       ?.querySelector<HTMLButtonElement>(".order-cart-close")
-      ?.focus();
+      ?.focus({ preventScroll: true });
     const onKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
       if (event.key === "Escape") setCartOpen(false);
       if (event.key !== "Tab") return;
       const targets = Array.from(
@@ -70,10 +125,10 @@ export default function OrderContent() {
       const last = targets[targets.length - 1];
       if (event.shiftKey && document.activeElement === first) {
         event.preventDefault();
-        last?.focus();
+        last?.focus({ preventScroll: true });
       } else if (!event.shiftKey && document.activeElement === last) {
         event.preventDefault();
-        first?.focus();
+        first?.focus({ preventScroll: true });
       }
     };
     const onResize = () => {
@@ -85,11 +140,12 @@ export default function OrderContent() {
       document.body.style.overflow = oldOverflow;
       document.removeEventListener("keydown", onKey);
       mobile.removeEventListener("change", onResize);
-      trigger?.focus();
+      trigger?.focus({ preventScroll: true });
     };
   }, [cartOpen]);
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
+    setHistoryRequested(params.get("history") === "1");
     if (params.get("table")) setTable(params.get("table")!);
     try {
       const saved = sessionStorage.getItem("palace_order");
@@ -110,10 +166,14 @@ export default function OrderContent() {
       .then((items) => {
         setMenu(items);
         const featuredId = params.get("item");
-        if (
-          featuredId &&
-          items.some((item) => item.id === featuredId && item.stock !== 0)
-        ) {
+        const featuredItem = items.find(
+          (item) => item.id === featuredId && item.stock !== 0,
+        );
+        if (featuredId && featuredItem) {
+          setAdded({
+            name: featuredItem.name,
+            sequence: ++feedbackSequence.current,
+          });
           setCart((current) => ({
             ...current,
             [featuredId]: Math.max(1, current[featuredId] || 0),
@@ -128,6 +188,44 @@ export default function OrderContent() {
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
   }, []);
+  useEffect(() => {
+    if (!customerSession) {
+      setHistory(null);
+      return;
+    }
+    let active = true;
+    let finished = false;
+    const update = async () => {
+      if (finished || document.hidden) return;
+      try {
+        const data = await api<SessionHistory>(
+          `/api/customer-session?table=${customerSession.table}`,
+          { headers: { "X-Customer-Token": customerSession.token } },
+        );
+        if (!active) return;
+        setHistoryError("");
+        if (data.closed_at) {
+          finished = true;
+          setHistory(null);
+          setClosed(true);
+          setCustomerSession(null);
+          try {
+            sessionStorage.removeItem("palace_customer_session");
+          } catch {}
+        } else {
+          setHistory(data);
+        }
+      } catch (error) {
+        if (active) setHistoryError((error as Error).message);
+      }
+    };
+    void update();
+    const timer = window.setInterval(update, 2000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [customerSession, receipt?.id]);
   useEffect(() => {
     if (!receipt) return;
     let active = true;
@@ -158,7 +256,33 @@ export default function OrderContent() {
       if (document.hidden) return;
       api<MenuItem[]>("/api/menu")
         .then((data) => {
-          if (active) setMenu(data);
+          if (!active) return;
+          const current = menuRef.current;
+          if (!current.length) {
+            setMenu(data);
+            return;
+          }
+          // Availability can change live; defer changes that would move dishes.
+          const structure = (items: MenuItem[]) =>
+            JSON.stringify(
+              items.map(({ id, name, category, description }) => ({
+                id,
+                name,
+                category,
+                description,
+              })),
+            );
+          setMenuUpdate(structure(current) === structure(data) ? null : data);
+          setMenu(
+            current.map((item) => {
+              const latest = data.find((dish) => dish.id === item.id);
+              return {
+                ...item,
+                stock: latest ? latest.stock : 0,
+                price_cents: latest?.price_cents ?? item.price_cents,
+              };
+            }),
+          );
         })
         .catch(() => {});
       api<TableChoice[]>("/api/tables", {
@@ -201,8 +325,14 @@ export default function OrderContent() {
     };
   }, [receipt, customerSession, restored]);
   const change = (id: string, quantity: number) => {
+    const item = menu.find((dish) => dish.id === id);
+    if (!item) return;
+    const next = Math.max(0, Math.min(50, item.stock ?? 50, quantity));
+    if (next > (cart[id] || 0)) {
+      setAdded({ name: item.name, sequence: ++feedbackSequence.current });
+    }
     request.current = null;
-    setCart((c) => ({ ...c, [id]: Math.max(0, Math.min(50, quantity)) }));
+    setCart((c) => ({ ...c, [id]: next }));
   };
   const selected = menu.filter((i) => cart[i.id] > 0);
   const total = selected.reduce(
@@ -217,9 +347,6 @@ export default function OrderContent() {
     selectedTable && selectedTable.status !== "occupied",
   );
   const available = menu.filter((item) => item.stock !== 0);
-  const featured = ["Masala Dosa", "Butter Chicken", "Chicken Biryani"]
-    .map((name) => available.find((item) => item.name === name))
-    .filter((item): item is MenuItem => Boolean(item));
   const hasCurry = selected.some((item) =>
     item.category.toLowerCase().includes("curr"),
   );
@@ -286,6 +413,7 @@ export default function OrderContent() {
       setTrackedOrder(null);
       if (selectedTable?.status !== "yours") {
         const owner = { table: Number(table), token: request.current.token };
+        setHistory(null);
         setCustomerSession(owner);
         try {
           sessionStorage.setItem(
@@ -321,45 +449,90 @@ export default function OrderContent() {
   }
   return (
     <main id="main" className="order-page">
-      <header className="order-intro">
-        <div className="order-heading">
-          <Link href="/menu">← Back to menu</Link>
+      <header className="order-menu-intro">
+        <div>
           <span className="eyebrow">CHENNAI PALACE · DINE IN</span>
-          <h1>
-            Good food,
-            <br />
-            <em>your way.</em>
-          </h1>
-          <p>
-            Pick what sounds good. We’ll send your order to the cashier for
-            confirmation.
-          </p>
-          <div className="order-intro-steps">
-            <span>
-              <b>01</b> Choose dishes
-            </span>
-            <span>
-              <b>02</b> Enter table
-            </span>
-            <span>
-              <b>03</b> Send order
-            </span>
-          </div>
+          <h1>{receipt ? "Your table order" : "What are you craving?"}</h1>
+          <p>Pick your favourites. Choose your table when you’re ready.</p>
         </div>
-        <div className="order-intro-image">
-          <Image
-            src="/images/dosa.webp"
-            alt="Fresh South Indian dosa"
-            fill
-            sizes="(max-width: 800px) 100vw, 40vw"
-            priority
-          />
-        </div>
+        <Link href="/menu">
+          Browse menu <ArrowRight size={16} />
+        </Link>
       </header>
+      <div
+        className="order-feedback"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        {added && (
+          <span key={added.sequence}>
+            <Check size={18} /> {added.name} added to your order
+          </span>
+        )}
+      </div>
       {error && (
         <div className="ops-alert" role="alert">
           {error}
         </div>
+      )}
+      {customerSession && (
+        <details
+          className="order-session-history"
+          open={Boolean(receipt) || historyRequested}
+        >
+          <summary>
+            Order history · Table {customerSession.table}
+            {history && (
+              <span>
+                {history.orders.length}{" "}
+                {history.orders.length === 1 ? "order" : "orders"}
+              </span>
+            )}
+          </summary>
+          <div
+            className="order-history-list"
+            role="region"
+            aria-label="Session order history"
+            tabIndex={0}
+          >
+            {historyError && (
+              <p role="alert">
+                {historyError} History will refresh automatically.
+              </p>
+            )}
+            {!history && !historyError && <p>Loading your session’s orders…</p>}
+            {history?.orders.map((order, index) => (
+              <article className="order-history-entry" key={order.id}>
+                <div className="order-history-heading">
+                  <h3>
+                    Order {index + 1}{" "}
+                    <small>#{order.id.slice(0, 8).toUpperCase()}</small>
+                  </h3>
+                  <span className={`ops-badge ${order.status}`}>
+                    {order.status === "pending"
+                      ? "Awaiting cashier"
+                      : order.status === "accepted"
+                        ? "Accepted"
+                        : "Declined"}
+                  </span>
+                </div>
+                {order.items.map((item, itemIndex) => (
+                  <div className="cart-line" key={itemIndex}>
+                    <span>
+                      {item.quantity} × {item.name}
+                    </span>
+                    <strong>{money(item.price_cents * item.quantity)}</strong>
+                  </div>
+                ))}
+                <div className="cart-total">
+                  <span>Order total</span>
+                  <strong>{money(order.total_cents)}</strong>
+                </div>
+              </article>
+            ))}
+          </div>
+        </details>
       )}
       {receipt ? (
         <section className="order-receipt">
@@ -415,65 +588,6 @@ export default function OrderContent() {
       ) : (
         <div className="order-layout">
           <section>
-            {featured.length > 0 && !query && category === "All dishes" && (
-              <section
-                className="order-featured"
-                aria-labelledby="order-featured-title"
-              >
-                <div className="order-section-heading">
-                  <div>
-                    <span className="eyebrow">A GOOD PLACE TO START</span>
-                    <h2 id="order-featured-title">What sounds good?</h2>
-                  </div>
-                  <p>Start with a dish, then make it your own.</p>
-                </div>
-                <div className="order-featured-grid">
-                  {featured.map((item, index) => (
-                    <article className="order-featured-card" key={item.id}>
-                      <span className="order-featured-index">0{index + 1}</span>
-                      <div>
-                        <span className="order-featured-label">
-                          {index === 0
-                            ? "SOUTH INDIAN"
-                            : index === 1
-                              ? "FOR THE TABLE"
-                              : "RICE & SPICE"}
-                        </span>
-                        <h3>{item.name}</h3>
-                        <p>
-                          {item.description ||
-                            (index === 0
-                              ? "Crisp, warm and full of flavour."
-                              : index === 1
-                                ? "Comforting, rich and ready to share."
-                                : "A fragrant meal in its own right.")}
-                        </p>
-                      </div>
-                      <button
-                        disabled={
-                          item.stock !== null &&
-                          (cart[item.id] || 0) >= item.stock
-                        }
-                        onClick={() =>
-                          change(item.id, (cart[item.id] || 0) + 1)
-                        }
-                        aria-label={`Add one ${item.name}`}
-                      >
-                        <span>{money(item.price_cents)}</span>
-                        <Plus size={17} />
-                      </button>
-                    </article>
-                  ))}
-                </div>
-              </section>
-            )}
-            <div className="order-section-heading order-menu-heading">
-              <div>
-                <span className="eyebrow">EXPLORE THE MENU</span>
-                <h2>Find your next bite.</h2>
-              </div>
-              <span>{matching.length} dishes</span>
-            </div>
             <div className="order-filters">
               <label className="order-search">
                 <Search size={18} />
@@ -494,12 +608,30 @@ export default function OrderContent() {
                   <button
                     key={name}
                     aria-pressed={category === name}
-                    onClick={() => setCategory(name)}
+                    onClick={() => {
+                      scrollCategory(name);
+                      setCategory(name);
+                    }}
                   >
                     {name}
                   </button>
                 ))}
               </div>
+            </div>
+            <div className="order-menu-count">
+              {loading ? "Preparing the menu…" : `${matching.length} dishes`}{" "}
+              {menuUpdate && (
+                <button
+                  className="order-menu-refresh"
+                  onClick={() => {
+                    setMenu(menuUpdate);
+                    setMenuUpdate(null);
+                  }}
+                >
+                  Refresh updated menu
+                </button>
+              )}
+              <span>ALL PRICES IN AUD</span>
             </div>
             {loading ? (
               <p>Loading today’s menu…</p>
@@ -520,43 +652,80 @@ export default function OrderContent() {
                       >
                         <h2>{c}</h2>
                         {dishes.map((i) => (
-                          <article className="order-dish" key={i.id}>
+                          <article
+                            className={`order-dish${cart[i.id] ? " is-selected" : ""}`}
+                            key={i.id}
+                          >
                             <div>
                               <h3>{i.name}</h3>
                               <p>{i.description}</p>
                               <strong>{money(i.price_cents)}</strong>
-                              {i.stock === 0 && (
-                                <span className="ops-badge">Sold out</span>
-                              )}
+                              <span
+                                className="ops-badge"
+                                style={{
+                                  visibility:
+                                    i.stock === 0 ? "visible" : "hidden",
+                                }}
+                              >
+                                Sold out
+                              </span>
                             </div>
                             <div className="order-dish-actions">
-                              <div className="quantity-control">
+                              {!cart[i.id] ? (
                                 <button
-                                  disabled={!cart[i.id]}
-                                  aria-label={`Remove one ${i.name}`}
-                                  onClick={() =>
-                                    change(i.id, (cart[i.id] || 0) - 1)
-                                  }
-                                >
-                                  −
-                                </button>
-                                <span aria-live="polite">
-                                  {cart[i.id] || 0}
-                                </span>
-                                <button
-                                  disabled={
-                                    i.stock === 0 ||
-                                    (cart[i.id] || 0) >=
-                                      Math.min(i.stock ?? 50, 50)
-                                  }
+                                  className="order-add"
+                                  disabled={i.stock === 0}
                                   aria-label={`Add one ${i.name}`}
-                                  onClick={() =>
-                                    change(i.id, (cart[i.id] || 0) + 1)
-                                  }
+                                  onClick={() => change(i.id, 1)}
                                 >
-                                  +
+                                  {i.stock === 0 ? (
+                                    "Sold out"
+                                  ) : (
+                                    <>
+                                      Add <Plus size={17} />
+                                    </>
+                                  )}
                                 </button>
-                              </div>
+                              ) : (
+                                <div className="quantity-control">
+                                  <button
+                                    disabled={!cart[i.id]}
+                                    aria-label={`Remove one ${i.name}`}
+                                    onClick={() =>
+                                      change(i.id, (cart[i.id] || 0) - 1)
+                                    }
+                                  >
+                                    −
+                                  </button>
+                                  <span
+                                    key={cart[i.id]}
+                                    className="order-quantity-pop"
+                                  >
+                                    {cart[i.id]}
+                                  </span>
+                                  <button
+                                    disabled={
+                                      i.stock === 0 ||
+                                      (cart[i.id] || 0) >=
+                                        Math.min(i.stock ?? 50, 50)
+                                    }
+                                    aria-label={`Add one ${i.name}`}
+                                    onClick={() =>
+                                      change(i.id, (cart[i.id] || 0) + 1)
+                                    }
+                                  >
+                                    +
+                                  </button>
+                                </div>
+                              )}
+                              <small
+                                className="order-in-cart"
+                                style={{
+                                  visibility: cart[i.id] ? "visible" : "hidden",
+                                }}
+                              >
+                                <Check size={12} /> In your order
+                              </small>
                             </div>
                           </article>
                         ))}
@@ -597,7 +766,11 @@ export default function OrderContent() {
           >
             <div className="order-cart-header">
               <span className="eyebrow">YOUR TABLE, YOUR FAVOURITES</span>
-              <ShoppingBag size={20} className="order-cart-icon" />
+              <ShoppingBag
+                key={added?.sequence || 0}
+                size={20}
+                className={`order-cart-icon${added ? " order-cart-pop" : ""}`}
+              />
               <button
                 className="order-cart-close"
                 aria-label="Close cart"
@@ -612,118 +785,101 @@ export default function OrderContent() {
                   : "The good stuff starts here."}
               </p>
             </div>
-            {error && (
-              <div className="ops-alert order-cart-error" role="alert">
-                {error}
-              </div>
-            )}
-            <label className="ops-field">
-              Table number
-              <select
-                aria-label="Table number"
-                required
-                value={table}
-                disabled={tablesLoading || availableTables.length === 0}
-                onChange={(e) => {
-                  setTable(e.target.value);
-                  request.current = null;
-                }}
-              >
-                <option value="">
-                  {tablesLoading ? "Loading tables…" : "Select your table"}
-                </option>
-                {availableTables.map((choice) => (
-                  <option
-                    key={choice.number}
-                    value={choice.number}
-                    disabled={choice.status === "occupied"}
-                  >
-                    Table {choice.number}
-                    {choice.status === "occupied"
-                      ? " · In use"
-                      : choice.status === "yours"
-                        ? " · Your table"
-                        : ""}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {!tablesLoading &&
-              !availableTables.some(
-                (choice) => choice.status !== "occupied",
-              ) && (
-                <p className="order-fine">
-                  No tables are available. Please ask the cashier.
-                </p>
+            <div className="order-cart-body">
+              {error && (
+                <div className="ops-alert order-cart-error" role="alert">
+                  {error}
+                </div>
               )}
-            {selected.length === 0 ? (
-              <p className="order-cart-empty">
-                Choose a dish from the menu to get started.
-              </p>
-            ) : (
-              selected.map((i) => (
-                <div className="cart-line" key={i.id}>
-                  <span>
-                    {cart[i.id]} × {i.name}
-                  </span>
-                  <strong>{money(i.price_cents * cart[i.id])}</strong>
-                </div>
-              ))
-            )}
-            {selected.length > 0 && suggestions.length > 0 && (
-              <section
-                className="order-pairings"
-                aria-label="Suggested additions"
-              >
-                <div className="order-pairings-heading">
-                  <Sparkles size={17} />
-                  <div>
-                    <strong>Make it a meal</strong>
-                    <span>Nice alongside your picks</span>
-                  </div>
-                </div>
-                {suggestions.map((item) => (
-                  <div className="order-pairing" key={item.id}>
-                    <div>
-                      <strong>{item.name}</strong>
-                      <span>{money(item.price_cents)}</span>
-                    </div>
-                    <button
-                      disabled={item.stock === 0}
-                      onClick={() => change(item.id, 1)}
-                      aria-label={`Add one ${item.name}`}
-                    >
-                      <Plus size={17} />
-                      <span className="sr-only">Add</span>
-                    </button>
-                  </div>
-                ))}
-              </section>
-            )}
-            <label className="ops-field">
-              Order notes{" "}
-              <small>Optional · speak to staff about allergies</small>
-              <textarea
-                value={notes}
-                maxLength={500}
-                onChange={(e) => {
-                  setNotes(e.target.value);
+              <TableSelect
+                key={String(cartOpen)}
+                value={table}
+                choices={availableTables}
+                loading={tablesLoading}
+                onChange={(value) => {
+                  setTable(value);
                   request.current = null;
                 }}
-                placeholder="Any special requests?"
               />
-            </label>
+              {!tablesLoading &&
+                !availableTables.some(
+                  (choice) => choice.status !== "occupied",
+                ) && (
+                  <p className="order-fine">
+                    No tables are available. Please ask the cashier.
+                  </p>
+                )}
+              {selected.length === 0 ? (
+                <p className="order-cart-empty">
+                  Choose a dish from the menu to get started.
+                </p>
+              ) : (
+                selected.map((i) => (
+                  <div className="cart-line" key={i.id}>
+                    <span>
+                      {cart[i.id]} × {i.name}
+                    </span>
+                    <strong>{money(i.price_cents * cart[i.id])}</strong>
+                  </div>
+                ))
+              )}
+              {selected.length > 0 && suggestions.length > 0 && (
+                <section
+                  className="order-pairings"
+                  aria-label="Suggested additions"
+                >
+                  <div className="order-pairings-heading">
+                    <Sparkles size={17} />
+                    <div>
+                      <strong>Make it a meal</strong>
+                      <span>Nice alongside your picks</span>
+                    </div>
+                  </div>
+                  {suggestions.map((item) => (
+                    <div className="order-pairing" key={item.id}>
+                      <div>
+                        <strong>{item.name}</strong>
+                        <span>{money(item.price_cents)}</span>
+                      </div>
+                      <button
+                        disabled={item.stock === 0}
+                        onClick={() => change(item.id, 1)}
+                        aria-label={`Add one ${item.name}`}
+                      >
+                        <Plus size={17} />
+                        <span className="sr-only">Add</span>
+                      </button>
+                    </div>
+                  ))}
+                </section>
+              )}
+              <label className="ops-field">
+                Order notes{" "}
+                <small>Optional · speak to staff about allergies</small>
+                <textarea
+                  value={notes}
+                  maxLength={500}
+                  onChange={(e) => {
+                    setNotes(e.target.value);
+                    request.current = null;
+                  }}
+                  placeholder="Any special requests?"
+                />
+              </label>
+            </div>
             <div className="order-cart-checkout">
               <div className="cart-total">
                 <span>Estimated total</span>
-                <strong>{money(total)}</strong>
+                <strong key={count} className="order-total-pop">
+                  {money(total)}
+                </strong>
               </div>
               <button
                 className="button"
                 disabled={busy || !selected.length || !canUseTable}
                 onClick={placeOrder}
               >
-                {busy ? "Sending order…" : "Send order to cashier"}
+                {busy ? "Placing order…" : "Place order"}
               </button>
               <p className="order-fine">
                 All prices in AUD. Order is confirmed when accepted by the
@@ -741,7 +897,9 @@ export default function OrderContent() {
                 ? `${count} ${count === 1 ? "item" : "items"} in your order`
                 : "Your table order"}
             </small>
-            <strong>{money(total)}</strong>
+            <strong key={count} className="order-total-pop">
+              {money(total)}
+            </strong>
           </span>
           <button
             ref={cartTrigger}

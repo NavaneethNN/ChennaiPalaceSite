@@ -29,8 +29,17 @@ import {
   type TableSession,
   type RestaurantTable,
   type Order,
+  type PrinterSettings,
+  type DetectedPrinter,
+  type PaperSize,
 } from "@/lib/types";
-type Tab = "orders" | "menu" | "tables" | "cashiers" | "history";
+import {
+  enqueueOrderPrint,
+  subscribePrintStatus,
+  type OrderPrintStatus,
+  checkWindowsBridge,
+} from "@/lib/client-print";
+type Tab = "orders" | "menu" | "tables" | "cashiers" | "printers" | "history";
 type MenuDraft = {
   version?: number;
   id?: string;
@@ -97,10 +106,35 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
   const [cashierDraft, setCashierDraft] = useState<CashierDraft | null>(null);
   const [closing, setClosing] = useState<TableSession | null>(null);
   const [lastKot, setLastKot] = useState<string | null>(null);
+  const [printerSettings, setPrinterSettings] = useState<PrinterSettings>({
+    kitchen_printer: "",
+    kitchen_paper_size: "80mm",
+    cashier_printer: "",
+    cashier_paper_size: "80mm",
+  });
+  const [detectedPrinters, setDetectedPrinters] = useState<DetectedPrinter[]>(
+    [],
+  );
+  const [scanningPrinters, setScanningPrinters] = useState(false);
+  const [printerPlatform, setPrinterPlatform] = useState("");
+  const [kitchenPrinterDraft, setKitchenPrinterDraft] = useState("");
+  const [kitchenPaperDraft, setKitchenPaperDraft] = useState<PaperSize>("80mm");
+  const [cashierPrinterDraft, setCashierPrinterDraft] = useState("");
+  const [cashierPaperDraft, setCashierPaperDraft] = useState<PaperSize>("80mm");
+  const [bridgeConnected, setBridgeConnected] = useState(false);
+  const [printStatuses, setPrintStatuses] = useState<
+    Record<string, OrderPrintStatus>
+  >({});
+  const [autoPrint, setAutoPrint] = useState(true);
   const refreshing = useRef(false);
   const refreshAgain = useRef(false);
   const [live, setLive] = useState(false);
   const [updated, setUpdated] = useState("");
+  useEffect(() => {
+    const unsub = subscribePrintStatus(setPrintStatuses);
+    void checkWindowsBridge().then((ok) => setBridgeConnected(ok));
+    return unsub;
+  }, []);
   useEffect(() => {
     api<Staff>("/api/auth")
       .then((u) => {
@@ -138,10 +172,138 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
       menu: MenuItem[];
       cashiers: Cashier[];
       tables: RestaurantTable[];
+      printers?: PrinterSettings;
     }>("/api/admin");
     setMenu(data.menu);
     setCashiers(data.cashiers);
     setConfiguredTables(data.tables);
+    if (data.printers) {
+      setPrinterSettings(data.printers);
+      setKitchenPrinterDraft(data.printers.kitchen_printer || "");
+      setKitchenPaperDraft(data.printers.kitchen_paper_size || "80mm");
+      setCashierPrinterDraft(data.printers.cashier_printer || "");
+      setCashierPaperDraft(data.printers.cashier_paper_size || "80mm");
+    }
+  }, []);
+  function inferPaper(name: string): PaperSize {
+    const lower = name.toLowerCase();
+    if (
+      lower.includes("58") ||
+      lower.includes("2inch") ||
+      lower.includes("2-inch") ||
+      lower.includes("58mm")
+    ) {
+      return "58mm";
+    }
+    return "80mm";
+  }
+  function handlePrinterInputChange(
+    val: string,
+    target: "kitchen" | "cashier",
+  ) {
+    if (target === "kitchen") {
+      setKitchenPrinterDraft(val);
+      if (val) setKitchenPaperDraft(inferPaper(val));
+    } else {
+      setCashierPrinterDraft(val);
+      if (val) setCashierPaperDraft(inferPaper(val));
+    }
+  }
+  const detectPrinters = useCallback(async () => {
+    setScanningPrinters(true);
+    setError("");
+    let found: DetectedPrinter[] = [];
+    let detectedSource = "";
+    let bridgeOk = false;
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 1500);
+      const res = await fetch("http://127.0.0.1:18080/printers", {
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      if (res.ok) {
+        const localPrinters = await res.json();
+        if (Array.isArray(localPrinters) && localPrinters.length > 0) {
+          found = localPrinters
+            .map(
+              (p: {
+                name?: string;
+                Name?: string;
+                default?: boolean;
+                is_default?: boolean;
+                port?: string;
+                PortName?: string;
+              }) => ({
+                name: p.name || p.Name || "",
+                is_default: Boolean(p.is_default || p.default),
+                port: p.port || p.PortName,
+              }),
+            )
+            .filter((p: DetectedPrinter) => p.name);
+          bridgeOk = true;
+          detectedSource = "Windows local bridge";
+        }
+      }
+    } catch {
+      // Local bridge not running or timed out; continue to server API
+    }
+
+    setBridgeConnected(bridgeOk);
+
+    try {
+      const data = await api<{
+        settings: PrinterSettings;
+        system_printers: DetectedPrinter[];
+        platform: string;
+        source: string;
+      }>("/api/admin/printers");
+
+      if (data.settings) {
+        setPrinterSettings(data.settings);
+        setKitchenPrinterDraft(
+          (prev) => prev || data.settings.kitchen_printer || "",
+        );
+        setKitchenPaperDraft(
+          (prev) => prev || data.settings.kitchen_paper_size || "80mm",
+        );
+        setCashierPrinterDraft(
+          (prev) => prev || data.settings.cashier_printer || "",
+        );
+        setCashierPaperDraft(
+          (prev) => prev || data.settings.cashier_paper_size || "80mm",
+        );
+      }
+
+      setPrinterPlatform(data.platform);
+
+      const map = new Map<string, DetectedPrinter>();
+      for (const p of found) {
+        if (p.name) map.set(p.name.toLowerCase(), p);
+      }
+      for (const p of data.system_printers || []) {
+        if (p.name && !map.has(p.name.toLowerCase())) {
+          map.set(p.name.toLowerCase(), p);
+        }
+      }
+      const allDetected = Array.from(map.values());
+      setDetectedPrinters(allDetected);
+
+      if (allDetected.length > 0) {
+        setNotice(
+          `Discovered ${allDetected.length} printer${allDetected.length === 1 ? "" : "s"} (${detectedSource || data.source || "system"}). Assign them to Kitchen or Cashier below.`,
+        );
+      } else {
+        setNotice(
+          "Scan finished. If two printers are connected, ensure Windows drivers are installed or run the Windows bridge helper.",
+        );
+      }
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setScanningPrinters(false);
+    }
   }, []);
   useEffect(() => {
     if (!user) return;
@@ -156,7 +318,10 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
       void update();
       if (
         user.role === "admin" &&
-        (tab === "menu" || tab === "tables" || tab === "cashiers")
+        (tab === "menu" ||
+          tab === "tables" ||
+          tab === "cashiers" ||
+          tab === "printers")
       )
         void loadAdmin().catch((e) => {
           if (active) setError(e.message);
@@ -201,11 +366,18 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
     if (!user) return;
     if (tab === "menu" || tab === "tables" || tab === "cashiers")
       loadAdmin().catch((e) => setError(e.message));
+    if (tab === "printers") {
+      loadAdmin()
+        .then(() => {
+          if (detectedPrinters.length === 0) void detectPrinters();
+        })
+        .catch((e) => setError(e.message));
+    }
     if (tab === "history")
       api<TableSession[]>("/api/operations?history=1")
         .then(setHistory)
         .catch((e) => setError(e.message));
-  }, [tab, user, loadAdmin]);
+  }, [tab, user, loadAdmin, detectPrinters, detectedPrinters.length]);
   async function login(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
@@ -238,9 +410,10 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
     }
   }
   async function processOrder(order: Order, action: "accept" | "reject") {
-    // Open synchronously during the click so browsers permit the generated PDF tab.
-    const pdf =
-      action === "accept" ? window.open("about:blank", "_blank") : null;
+    // When autoPrint is active, avoid popup tabs which browsers block during continuous orders.
+    // The print engine sends jobs directly to Windows thermal printers or silent iframe queue.
+    const openTab = !autoPrint && action === "accept";
+    const pdf = openTab ? window.open("about:blank", "_blank") : null;
     if (pdf) pdf.opener = null;
     setActionBusy(order.id);
     setError("");
@@ -252,13 +425,18 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
       });
       if (result.kot_url) {
         setLastKot(result.kot_url);
-        if (pdf) pdf.location.href = result.kot_url;
-        setNotice(
-          pdf
-            ? "Order accepted. KOT PDF opened for printing."
-            : "Order accepted. Use “Open latest KOT” below; your browser blocked the PDF tab.",
-        );
-      } else setNotice("Order rejected. Stock and table total are unchanged.");
+        if (pdf) {
+          pdf.location.href = result.kot_url;
+          setNotice("Order accepted. KOT PDF opened for printing.");
+        } else {
+          enqueueOrderPrint(order, printerSettings);
+          setNotice(
+            `Order #${order.id.slice(0, 8).toUpperCase()} accepted. KOT dispatched to printer queue.`,
+          );
+        }
+      } else {
+        setNotice("Order rejected. Stock and table total are unchanged.");
+      }
       await refresh();
     } catch (e) {
       pdf?.close();
@@ -364,6 +542,82 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
       setActionBusy("");
     }
   }
+  async function savePrinters(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await send("/api/admin", {
+        kind: "printer",
+        kitchen_printer: kitchenPrinterDraft,
+        kitchen_paper_size: kitchenPaperDraft,
+        cashier_printer: cashierPrinterDraft,
+        cashier_paper_size: cashierPaperDraft,
+      });
+      setPrinterSettings({
+        kitchen_printer: kitchenPrinterDraft,
+        kitchen_paper_size: kitchenPaperDraft,
+        cashier_printer: cashierPrinterDraft,
+        cashier_paper_size: cashierPaperDraft,
+      });
+      setNotice(
+        `Printer assignments saved! Kitchen: ${kitchenPrinterDraft || "(default)"} [${kitchenPaperDraft}], Cashier: ${cashierPrinterDraft || "(default)"} [${cashierPaperDraft}]. KOT formatting adjusts automatically.`,
+      );
+      await loadAdmin();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  function assignPrinter(name: string, target: "kitchen" | "cashier") {
+    const paper = inferPaper(name);
+    if (target === "kitchen") {
+      setKitchenPrinterDraft(name);
+      setKitchenPaperDraft(paper);
+      setNotice(
+        `Selected "${name}" (paper auto-adjusted to ${paper}) for Kitchen. Click "Save printer configuration" below to confirm.`,
+      );
+    } else {
+      setCashierPrinterDraft(name);
+      setCashierPaperDraft(paper);
+      setNotice(
+        `Selected "${name}" (paper auto-adjusted to ${paper}) for Cashier. Click "Save printer configuration" below to confirm.`,
+      );
+    }
+  }
+  async function clearPrinter(target: "kitchen" | "cashier") {
+    setBusy(true);
+    setError("");
+    setNotice("");
+    const newKitchen = target === "kitchen" ? "" : kitchenPrinterDraft;
+    const newCashier = target === "cashier" ? "" : cashierPrinterDraft;
+    try {
+      await send("/api/admin", {
+        kind: "printer",
+        kitchen_printer: newKitchen,
+        kitchen_paper_size: kitchenPaperDraft,
+        cashier_printer: newCashier,
+        cashier_paper_size: cashierPaperDraft,
+      });
+      if (target === "kitchen") setKitchenPrinterDraft("");
+      if (target === "cashier") setCashierPrinterDraft("");
+      setPrinterSettings((prev) => ({
+        ...prev,
+        kitchen_printer: newKitchen,
+        cashier_printer: newCashier,
+      }));
+      setNotice(
+        `${target === "kitchen" ? "Kitchen" : "Cashier"} printer unassigned.`,
+      );
+      await loadAdmin();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
   const modalOpen = Boolean(
     menuDraft || cashierDraft || tableDraft !== null || closing,
   );
@@ -416,23 +670,113 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
   const activeTotal = tables.reduce((n, t) => n + t.total_cents, 0);
   const current = tables.find((t) => t.id === selectedTable);
   const isAdmin = user?.role === "admin" && mode === "admin";
+  const isKitchenConnected = Boolean(
+    printerSettings.kitchen_printer &&
+      detectedPrinters.some(
+        (p) =>
+          p.name.trim().toLowerCase() ===
+          printerSettings.kitchen_printer.trim().toLowerCase(),
+      ),
+  );
+  const isCashierConnected = Boolean(
+    printerSettings.cashier_printer &&
+      detectedPrinters.some(
+        (p) =>
+          p.name.trim().toLowerCase() ===
+          printerSettings.cashier_printer.trim().toLowerCase(),
+      ),
+  );
   function ticketLinks(order: Order) {
+    const status = printStatuses[order.id];
+    const uniquePrinters = [...new Set(order.items.map((i) => i.printer))];
+
     return (
-      <div className="ticket-links">
+      <div
+        className="ticket-links"
+        style={{ flexWrap: "wrap", gap: "6px", alignItems: "center" }}
+      >
         <Printer size={14} />
+        <button
+          type="button"
+          className="ops-button secondary small"
+          style={{ padding: "4px 8px", minHeight: "28px", fontSize: "11px" }}
+          onClick={() => enqueueOrderPrint(order, printerSettings)}
+          title="Print or reprint KOT for this order"
+        >
+          Reprint KOT
+        </button>
         <a href={`/api/kot/${order.id}`} target="_blank" rel="noreferrer">
-          All KOTs
+          All KOTs PDF
         </a>
-        {[...new Set(order.items.map((i) => i.printer))].map((p) => (
-          <a
-            key={p}
-            href={`/api/kot/${order.id}?printer=${p}`}
-            target="_blank"
-            rel="noreferrer"
-          >
-            {p === "kitchen" ? "Kitchen" : "Cashier"} PDF
-          </a>
-        ))}
+        {uniquePrinters.map((p) => {
+          const assigned =
+            p === "kitchen"
+              ? printerSettings.kitchen_printer
+              : printerSettings.cashier_printer;
+          const paper =
+            p === "kitchen"
+              ? printerSettings.kitchen_paper_size
+              : printerSettings.cashier_paper_size;
+          const pStatus = p === "kitchen" ? status?.kitchen : status?.cashier;
+
+          return (
+            <span
+              key={p}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "4px",
+              }}
+            >
+              <a
+                href={`/api/kot/${order.id}?printer=${p}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {p === "kitchen" ? "Kitchen" : "Cashier"} PDF
+                {assigned ? ` (${assigned} · ${paper})` : ` (${paper})`}
+              </a>
+              {pStatus && (
+                <button
+                  type="button"
+                  className={`ops-badge ${
+                    pStatus === "printed"
+                      ? "accepted"
+                      : pStatus === "printing"
+                        ? "warning"
+                        : pStatus === "failed"
+                          ? "offline"
+                          : ""
+                  }`}
+                  style={{
+                    fontSize: "9px",
+                    padding: "2px 6px",
+                    border: "none",
+                    cursor: pStatus === "failed" ? "pointer" : "default",
+                  }}
+                  onClick={
+                    pStatus === "failed"
+                      ? () => enqueueOrderPrint(order, printerSettings, [p])
+                      : undefined
+                  }
+                  title={
+                    pStatus === "failed"
+                      ? "Print failed. Click to retry."
+                      : undefined
+                  }
+                >
+                  {pStatus === "printed"
+                    ? "Printed ✓"
+                    : pStatus === "printing"
+                      ? "Printing…"
+                      : pStatus === "failed"
+                        ? "Retry print ↻"
+                        : "Queued"}
+                </button>
+              )}
+            </span>
+          );
+        })}
       </div>
     );
   }
@@ -454,6 +798,9 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
                 <strong>{i.quantity} ×</strong> {i.name}
                 <small>
                   {i.printer === "kitchen" ? "Kitchen" : "Cashier"} printer
+                  {printerSettings?.[`${i.printer}_printer`]
+                    ? ` · ${printerSettings[`${i.printer}_printer`]}`
+                    : ""}
                 </small>
               </span>
               <strong>{money(i.price_cents * i.quantity)}</strong>
@@ -588,7 +935,7 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
             }}
           >
             <LayoutDashboard size={19} />
-            Orders & tables{pending.length > 0 && <span>{pending.length}</span>}
+            Orders & tables<span>{pending.length}</span>
           </button>
           {isAdmin && (
             <>
@@ -612,6 +959,13 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
               >
                 <Grid3X3 size={19} />
                 Dining tables
+              </button>
+              <button
+                className={tab === "printers" ? "selected" : ""}
+                onClick={() => setTab("printers")}
+              >
+                <Printer size={19} />
+                Printers
               </button>
             </>
           )}
@@ -657,7 +1011,9 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
                       ? "YOUR FRONT OF HOUSE TEAM"
                       : tab === "tables"
                         ? "YOUR DINING ROOM"
-                        : "SERVICE RECORDS"}
+                        : tab === "printers"
+                          ? "HARDWARE & PRINTING"
+                          : "SERVICE RECORDS"}
               </span>
               <h1>
                 {tab === "orders"
@@ -668,7 +1024,9 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
                       ? "Cashier accounts"
                       : tab === "tables"
                         ? "Dining tables"
-                        : "Closed sessions"}
+                        : tab === "printers"
+                          ? "Printer configuration"
+                          : "Closed sessions"}
               </h1>
               <p>
                 {tab === "orders"
@@ -679,7 +1037,9 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
                       ? "Create cashier access with a four digit PIN and four digit password."
                       : tab === "tables"
                         ? "Choose which table numbers customers can order from."
-                        : "Review the last 100 closed table sessions and their accepted orders."}
+                        : tab === "printers"
+                          ? "Assign your connected Windows thermal printers for kitchen tickets and cashier counter."
+                          : "Review the last 100 closed table sessions and their accepted orders."}
               </p>
             </div>
             {tab === "orders" ? (
@@ -710,6 +1070,20 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
               <button className="ops-button" onClick={() => setTableDraft("")}>
                 <Plus size={17} />
                 Add table
+              </button>
+            ) : tab === "printers" ? (
+              <button
+                className="ops-button secondary"
+                disabled={scanningPrinters}
+                onClick={() => detectPrinters()}
+              >
+                <RefreshCw
+                  size={16}
+                  className={scanningPrinters ? "animate-spin" : ""}
+                />
+                {scanningPrinters
+                  ? "Scanning Windows…"
+                  : "Scan Windows printers"}
               </button>
             ) : null}
           </div>
@@ -757,25 +1131,64 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
                 </div>
               </div>
               <div className="ops-service-grid">
-                <section className="ops-panel">
-                  <div className="ops-panel-heading">
-                    <h2>
-                      Incoming orders <span>{pending.length}</span>
-                    </h2>
-                    <small>
-                      {live ? "Live updates" : "Reconnecting"}
-                      {updated && ` · ${updated}`}
-                    </small>
-                  </div>
-                  {pending.length ? (
-                    pending.map((o) => orderCard(o, o.table_number))
-                  ) : (
-                    <div className="ops-empty">
-                      <ClipboardList size={30} />
-                      <h3>Ready for the next order</h3>
-                      <p>New customer orders will appear here.</p>
+                <section className="ops-panel ops-incoming-panel">
+                  <div
+                    className="ops-panel-heading"
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      flexWrap: "wrap",
+                      gap: "10px",
+                    }}
+                  >
+                    <div>
+                      <h2>
+                        Incoming orders{" "}
+                        <span aria-live="polite" aria-atomic="true">
+                          {pending.length}
+                        </span>
+                      </h2>
+                      <small>
+                        {live ? "Live updates" : "Reconnecting"}
+                        {updated && ` · ${updated}`}
+                        {bridgeConnected && " · ⚡ Thermal bridge connected"}
+                      </small>
                     </div>
-                  )}
+                    <label
+                      className="ops-checkbox"
+                      style={{
+                        margin: 0,
+                        fontSize: "11px",
+                        gap: "6px",
+                        cursor: "pointer",
+                      }}
+                      title="Automatically print KOT to thermal printers when order is accepted"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={autoPrint}
+                        onChange={(e) => setAutoPrint(e.target.checked)}
+                      />
+                      <span>Auto-print KOT on accept</span>
+                    </label>
+                  </div>
+                  <div
+                    className="ops-incoming-list"
+                    role="region"
+                    aria-label="Incoming order queue"
+                    tabIndex={0}
+                  >
+                    {pending.length ? (
+                      pending.map((o) => orderCard(o, o.table_number))
+                    ) : (
+                      <div className="ops-empty">
+                        <ClipboardList size={30} />
+                        <h3>Ready for the next order</h3>
+                        <p>New customer orders will appear here.</p>
+                      </div>
+                    )}
+                  </div>
                 </section>
                 <section className="ops-panel">
                   <div className="ops-panel-heading">
@@ -1064,6 +1477,383 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
                 </div>
               )}
             </section>
+          )}
+          {tab === "printers" && (
+            <div className="ops-printer-workspace">
+              <div className="ops-stats ops-printer-stats">
+                <div>
+                  <Printer size={22} />
+                  <span>Assigned kitchen printer</span>
+                  <strong>
+                    {printerSettings.kitchen_printer || "Not assigned"}
+                  </strong>
+                  <div className="ops-printer-stat-actions">
+                    {!printerSettings.kitchen_printer ? (
+                      <span className="ops-badge">Not configured</span>
+                    ) : isKitchenConnected ? (
+                      <span className="ops-badge accepted">
+                        {printerSettings.kitchen_paper_size} · Connected
+                      </span>
+                    ) : (
+                      <span className="ops-badge offline">
+                        {printerSettings.kitchen_paper_size} · Offline / Not detected
+                      </span>
+                    )}
+                    <div style={{ display: "flex", gap: "6px" }}>
+                      {printerSettings.kitchen_printer && (
+                        <button
+                          type="button"
+                          className="ops-button secondary small"
+                          onClick={() => clearPrinter("kitchen")}
+                          title="Clear this assignment"
+                        >
+                          Clear
+                        </button>
+                      )}
+                      <a
+                        href="/api/admin/printers/test?destination=kitchen"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="ops-button secondary small"
+                      >
+                        Test slip ↗
+                      </a>
+                    </div>
+                  </div>
+                </div>
+                <div>
+                  <Printer size={22} />
+                  <span>Assigned cashier printer</span>
+                  <strong>
+                    {printerSettings.cashier_printer || "Not assigned"}
+                  </strong>
+                  <div className="ops-printer-stat-actions">
+                    {!printerSettings.cashier_printer ? (
+                      <span className="ops-badge">Not configured</span>
+                    ) : isCashierConnected ? (
+                      <span className="ops-badge accepted">
+                        {printerSettings.cashier_paper_size} · Connected
+                      </span>
+                    ) : (
+                      <span className="ops-badge offline">
+                        {printerSettings.cashier_paper_size} · Offline / Not detected
+                      </span>
+                    )}
+                    <div style={{ display: "flex", gap: "6px" }}>
+                      {printerSettings.cashier_printer && (
+                        <button
+                          type="button"
+                          className="ops-button secondary small"
+                          onClick={() => clearPrinter("cashier")}
+                          title="Clear this assignment"
+                        >
+                          Clear
+                        </button>
+                      )}
+                      <a
+                        href="/api/admin/printers/test?destination=cashier"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="ops-button secondary small"
+                      >
+                        Test slip ↗
+                      </a>
+                    </div>
+                  </div>
+                </div>
+                <div>
+                  <LayoutDashboard size={22} />
+                  <span>Windows hardware detection</span>
+                  <strong>
+                    {detectedPrinters.length} printer
+                    {detectedPrinters.length === 1 ? "" : "s"}
+                  </strong>
+                  <div className="ops-printer-stat-actions">
+                    <span className="ops-badge">
+                      {bridgeConnected
+                        ? "Windows bridge active"
+                        : printerPlatform === "win32"
+                          ? "Windows native"
+                          : "System scanner"}
+                    </span>
+                    <button
+                      className="ops-button secondary small"
+                      disabled={scanningPrinters}
+                      onClick={() => detectPrinters()}
+                    >
+                      <RefreshCw
+                        size={13}
+                        className={scanningPrinters ? "animate-spin" : ""}
+                      />
+                      {scanningPrinters ? "Scanning…" : "Scan"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="ops-service-grid">
+                <section className="ops-panel">
+                  <div className="ops-panel-heading">
+                    <h2>Assign system printers</h2>
+                    <span>2 printers on same Windows PC</span>
+                  </div>
+                  <p className="ops-muted">
+                    Assign which printer handles kitchen tickets (KOT) and which
+                    printer handles cashier counter receipts. Paper widths
+                    automatically adjust ticket typography and margins.
+                  </p>
+
+                  <form onSubmit={savePrinters} className="ops-printer-form">
+                    <div className="ops-form-row">
+                      <label className="ops-field">
+                        <span>
+                          Kitchen printer
+                          <small>Food dishes (Dosas, curries, etc.)</small>
+                        </span>
+                        <input
+                          list="available-printers"
+                          placeholder="e.g. POS-80 Kitchen or EPSON TM-T88"
+                          value={kitchenPrinterDraft}
+                          onChange={(e) =>
+                            handlePrinterInputChange(e.target.value, "kitchen")
+                          }
+                          maxLength={120}
+                        />
+                      </label>
+
+                      <label className="ops-field">
+                        <span>
+                          Kitchen paper size
+                          <small>Auto-adjusts width & margins</small>
+                        </span>
+                        <select
+                          value={kitchenPaperDraft}
+                          onChange={(e) =>
+                            setKitchenPaperDraft(e.target.value as PaperSize)
+                          }
+                        >
+                          <option value="80mm">
+                            80mm — Standard Thermal Roll (3-inch width)
+                          </option>
+                          <option value="58mm">
+                            58mm — Compact Thermal Roll (2-inch width)
+                          </option>
+                        </select>
+                      </label>
+                    </div>
+
+                    <div className="ops-form-row">
+                      <label className="ops-field">
+                        <span>
+                          Cashier printer
+                          <small>Drinks, desserts & front counter</small>
+                        </span>
+                        <input
+                          list="available-printers"
+                          placeholder="e.g. POS-80 Cashier or POS-58"
+                          value={cashierPrinterDraft}
+                          onChange={(e) =>
+                            handlePrinterInputChange(e.target.value, "cashier")
+                          }
+                          maxLength={120}
+                        />
+                      </label>
+
+                      <label className="ops-field">
+                        <span>
+                          Cashier paper size
+                          <small>Auto-adjusts width & margins</small>
+                        </span>
+                        <select
+                          value={cashierPaperDraft}
+                          onChange={(e) =>
+                            setCashierPaperDraft(e.target.value as PaperSize)
+                          }
+                        >
+                          <option value="80mm">
+                            80mm — Standard Thermal Roll (3-inch width)
+                          </option>
+                          <option value="58mm">
+                            58mm — Compact Thermal Roll (2-inch width)
+                          </option>
+                        </select>
+                      </label>
+                    </div>
+
+                    <datalist id="available-printers">
+                      {detectedPrinters.map((p) => (
+                        <option key={p.name} value={p.name}>
+                          {p.name} {p.port ? `(${p.port})` : ""}
+                        </option>
+                      ))}
+                    </datalist>
+
+                    <div className="ops-actions" style={{ marginTop: "18px" }}>
+                      <button className="ops-button" disabled={busy}>
+                        {busy ? "Saving…" : "Save printer configuration"}
+                      </button>
+                      {(kitchenPrinterDraft ||
+                        cashierPrinterDraft ||
+                        printerSettings.kitchen_printer ||
+                        printerSettings.cashier_printer) && (
+                        <button
+                          type="button"
+                          className="ops-button secondary"
+                          disabled={busy}
+                          onClick={() => {
+                            void clearPrinter("kitchen");
+                            void clearPrinter("cashier");
+                          }}
+                        >
+                          Clear all assignments
+                        </button>
+                      )}
+                    </div>
+                  </form>
+
+                  {((printerSettings.kitchen_printer && !isKitchenConnected) ||
+                    (printerSettings.cashier_printer && !isCashierConnected)) && (
+                    <div
+                      className="ops-alert"
+                      style={{ marginTop: "16px", fontSize: "11px" }}
+                      role="alert"
+                    >
+                      <span>
+                        ⚠️ <strong>Hardware notice:</strong> The assigned printer
+                        name(s) are not currently detected on this machine. Plug
+                        your thermal printers in via USB or run the Windows
+                        helper script below to detect them.
+                      </span>
+                    </div>
+                  )}
+
+                  <div className="ops-printer-help-box">
+                    <h3>How ticket routing & paper sizing work</h3>
+                    <p>
+                      In <strong>Menu &amp; stock</strong>, each dish is assigned
+                      either <em>Kitchen printer</em> or{" "}
+                      <em>Cashier table printer</em>. When an order is accepted,
+                      Chennai Palace formats the KOT PDF to the exact roll width:
+                      80mm uses full-width columns, while 58mm compact rolls
+                      automatically scale down typography and margins to prevent
+                      line wrapping issues.
+                    </p>
+                  </div>
+                </section>
+
+                <section className="ops-panel">
+                  <div className="ops-panel-heading">
+                    <h2>Available Windows printers</h2>
+                    <span>{detectedPrinters.length} detected</span>
+                  </div>
+
+                  {detectedPrinters.length ? (
+                    <div className="ops-detected-list">
+                      {detectedPrinters.map((p) => {
+                        const isKitchen =
+                          kitchenPrinterDraft.toLowerCase() ===
+                          p.name.toLowerCase();
+                        const isCashier =
+                          cashierPrinterDraft.toLowerCase() ===
+                          p.name.toLowerCase();
+                        return (
+                          <article key={p.name} className="ops-detected-item">
+                            <div className="ops-detected-info">
+                              <div className="ops-detected-title">
+                                <Printer size={16} />
+                                <strong>{p.name}</strong>
+                                {p.is_default && (
+                                  <span className="ops-badge">Default</span>
+                                )}
+                              </div>
+                              {p.port && <small>Port: {p.port}</small>}
+                              {(isKitchen || isCashier) && (
+                                <div className="ops-detected-tags">
+                                  {isKitchen && (
+                                    <span className="ops-badge accepted">
+                                      Assigned to Kitchen
+                                    </span>
+                                  )}
+                                  {isCashier && (
+                                    <span className="ops-badge accepted">
+                                      Assigned to Cashier
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                            <div className="ops-detected-actions">
+                              <button
+                                type="button"
+                                className={`ops-button small ${isKitchen ? "" : "secondary"}`}
+                                onClick={() => assignPrinter(p.name, "kitchen")}
+                              >
+                                {isKitchen ? "✓ Kitchen" : "Set Kitchen"}
+                              </button>
+                              <button
+                                type="button"
+                                className={`ops-button small ${isCashier ? "" : "secondary"}`}
+                                onClick={() => assignPrinter(p.name, "cashier")}
+                              >
+                                {isCashier ? "✓ Cashier" : "Set Cashier"}
+                              </button>
+                            </div>
+                          </article>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="ops-empty">
+                      <Printer size={30} />
+                      <h3>No printers detected yet</h3>
+                      <p>
+                        Plug both printers into your Windows machine via USB or
+                        network, then click{" "}
+                        <strong>Scan Windows printers</strong> above.
+                      </p>
+                      <button
+                        className="ops-button secondary"
+                        disabled={scanningPrinters}
+                        onClick={() => detectPrinters()}
+                      >
+                        <RefreshCw
+                          size={15}
+                          className={scanningPrinters ? "animate-spin" : ""}
+                        />
+                        {scanningPrinters
+                          ? "Scanning…"
+                          : "Scan Windows printers now"}
+                      </button>
+                    </div>
+                  )}
+
+                  <div className="ops-printer-guide">
+                    <h4>Windows POS terminal setup</h4>
+                    <ul>
+                      <li>
+                        Both thermal receipt printers can be connected via USB or
+                        Ethernet to the same Windows PC.
+                      </li>
+                      <li>
+                        In Windows, open{" "}
+                        <strong>
+                          Settings &gt; Bluetooth &amp; Devices &gt; Printers
+                          &amp; Scanners
+                        </strong>{" "}
+                        to rename or confirm them (e.g. &ldquo;Kitchen
+                        Printer&rdquo; and &ldquo;Cashier Printer&rdquo;).
+                      </li>
+                      <li>
+                        If accessing Chennai Palace remotely from your Windows
+                        browser, run <code>windows-printer-bridge.bat</code> in
+                        the <code>scripts</code> folder to allow one-click
+                        detection.
+                      </li>
+                    </ul>
+                  </div>
+                </section>
+              </div>
+            </div>
           )}
           {tab === "history" && (
             <section className="ops-panel">

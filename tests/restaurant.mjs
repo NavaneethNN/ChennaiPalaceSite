@@ -351,6 +351,23 @@ try {
   const second = (await call("/api/orders", { method: "POST", data: nextData }))
     .value;
   orderIds.push(second.id);
+  const customerHistory = (
+    await call(`/api/customer-session?table=${table}`, { customerToken: token })
+  ).value;
+  assert.deepEqual(
+    customerHistory.orders.map((order) => order.id),
+    [first.id, second.id],
+  );
+  assert.equal(customerHistory.orders[0].total_cents, 2450);
+  await call(`/api/customer-session?table=${table}`, { expected: 401 });
+  await call(`/api/customer-session?table=${table}`, {
+    customerToken: randomUUID(),
+    expected: 404,
+  });
+  await call(`/api/customer-session?table=${browserTable}`, {
+    customerToken: token,
+    expected: 404,
+  });
   await client.query("UPDATE palace.menu_items SET stock=1 WHERE id=$1", [
     kitchen,
   ]);
@@ -399,6 +416,11 @@ try {
   ).value.find((s) => s.id === session.id);
   assert.equal(history.total_cents, 2450);
   assert.ok(history.closed_at);
+  const closedHistory = (
+    await call(`/api/customer-session?table=${table}`, { customerToken: token })
+  ).value;
+  assert.ok(closedHistory.closed_at);
+  assert.deepEqual(closedHistory.orders, []);
   assert.equal(
     (await call("/api/tables")).value.find((t) => t.number === table).status,
     "available",

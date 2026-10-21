@@ -47,6 +47,20 @@ export type Cashier = {
   pin: string;
   active: boolean;
 };
+export type PaperSize = "80mm" | "58mm";
+export type PrinterSettings = {
+  kitchen_printer: string;
+  kitchen_paper_size: PaperSize;
+  cashier_printer: string;
+  cashier_paper_size: PaperSize;
+  updated_at?: string;
+  updated_by?: string | null;
+};
+export type DetectedPrinter = {
+  name: string;
+  is_default?: boolean;
+  port?: string;
+};
 export const money = (cents: number) =>
   new Intl.NumberFormat("en-AU", { style: "currency", currency: "AUD" }).format(
     cents / 100,

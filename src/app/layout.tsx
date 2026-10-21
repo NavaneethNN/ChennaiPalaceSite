@@ -53,7 +53,7 @@ export default function RootLayout({
     hasMap: restaurant.maps,
   };
   return (
-    <html lang="en-AU">
+    <html lang="en-AU" data-scroll-behavior="smooth">
       <body>
         <a className="skip-link" href="#main">
           Skip to content

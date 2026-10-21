@@ -1,9 +1,9 @@
 "use client";
-import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useState, useRef } from "react";
-import { ArrowUpRight, ArrowLeft, Search, X, Phone, Plus } from "lucide-react";
+import { ArrowUpRight, Search, X, Phone, Plus } from "lucide-react";
 import initialMenu from "@/lib/menu.json";
+import { useCategoryScroll } from "@/lib/use-category-scroll";
 import { api } from "@/lib/client-api";
 import { money, type MenuItem } from "@/lib/types";
 import { restaurant } from "@/lib/content";
@@ -18,6 +18,33 @@ export default function MenuContent() {
   type DisplayGroup = { id: string; title: string; items: DisplayItem[] };
   const [menu, setMenu] = useState<DisplayGroup[]>(initialMenu);
   const [menuError, setMenuError] = useState("");
+  const [sessionTable, setSessionTable] = useState<number | null>(null);
+  useEffect(() => {
+    let active = true;
+    try {
+      const saved = JSON.parse(
+        sessionStorage.getItem("palace_customer_session") || "null",
+      );
+      if (Number.isInteger(saved?.table) && typeof saved?.token === "string") {
+        setSessionTable(saved.table);
+        api<{ closed_at: string | null }>(
+          `/api/customer-session?table=${saved.table}`,
+          {
+            headers: { "X-Customer-Token": saved.token },
+          },
+        )
+          .then((session) => {
+            if (active && session.closed_at) setSessionTable(null);
+          })
+          .catch(() => {
+            // Keep the return link available during a temporary connection failure.
+          });
+      }
+    } catch {}
+    return () => {
+      active = false;
+    };
+  }, []);
   useEffect(() => {
     api<MenuItem[]>("/api/menu")
       .then((items) => {
@@ -47,6 +74,11 @@ export default function MenuContent() {
       );
   }, []);
   const [category, setCategory] = useState("all");
+  const scrollCategory = useCategoryScroll(
+    category,
+    ".menu-toolbar",
+    ".menu-group, .menu-empty",
+  );
   const [query, setQuery] = useState("");
   const filters = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -81,6 +113,7 @@ export default function MenuContent() {
     return () => window.removeEventListener("popstate", read);
   }, []);
   const selectCategory = (value: string) => {
+    scrollCategory(value);
     setCategory(value);
     const url = new URL(window.location.href);
     if (value === "all") url.searchParams.delete("category");
@@ -107,83 +140,31 @@ export default function MenuContent() {
     .filter((item): item is DisplayItem & { id: string } => Boolean(item?.id));
   return (
     <main id="main">
-      <section className="menu-hero" id="top">
-        <div className="menu-hero-copy">
-          <Link className="back-link" href="/">
-            <ArrowLeft size={15} /> BACK TO THE PALACE
-          </Link>
+      <header className="menu-browse-intro" id="top">
+        <div>
           <span className="eyebrow">FROM OUR KITCHEN, WITH LOVE</span>
-          <h1>
-            So much to
-            <br />
-            <em>come hungry for.</em>
-          </h1>
+          <h1>Find your favourite.</h1>
           <p>
-            South Indian favourites. Indian classics.
-            <br />
-            Find your favourite, or let your appetite lead the way.
+            South Indian favourites, comforting curries and something sweet.
           </p>
-          <Link className="button menu-hero-order" href="/order">
+        </div>
+        <div className="menu-browse-actions">
+          <Link className="button" href="/order">
             Order for your table <ArrowUpRight size={18} />
           </Link>
+          {sessionTable !== null && (
+            <Link className="menu-history-link" href="/order?history=1">
+              View order history <span>Table {sessionTable}</span>{" "}
+              <ArrowUpRight size={16} />
+            </Link>
+          )}
         </div>
-        <div className="menu-hero-image">
-          <Image
-            src="/images/feast.webp"
-            alt="Biryani, curry and naan at the Chennai Palace table"
-            fill
-            unoptimized
-            priority
-            loading="eager"
-            fetchPriority="high"
-            sizes="(max-width: 760px) 100vw, 45vw"
-          />
-        </div>
-        <span className="menu-hero-star" aria-hidden="true">
-          ✳
-        </span>
-      </section>
+      </header>
       <section className="menu-main section-pad" aria-label="Restaurant menu">
         {menuError && (
           <p role="status" className="ops-alert">
             {menuError}
           </p>
-        )}
-        {inspiration.length > 0 && category === "all" && !query && (
-          <section
-            className="menu-inspiration"
-            aria-labelledby="menu-inspiration-title"
-          >
-            <div className="menu-inspiration-heading">
-              <div>
-                <span className="eyebrow">NOT SURE WHERE TO BEGIN?</span>
-                <h2 id="menu-inspiration-title">A little inspiration.</h2>
-                <p>A few ways to start your table order.</p>
-              </div>
-              <Link href="/order">
-                Build your order <ArrowUpRight size={17} />
-              </Link>
-            </div>
-            <div className="menu-inspiration-grid">
-              {inspiration.map((item, index) => (
-                <article key={item.id} className="menu-inspiration-card">
-                  <span className="menu-inspiration-number">0{index + 1}</span>
-                  <h3>{item.name}</h3>
-                  <p>
-                    {item.description ||
-                      (index === 0
-                        ? "A South Indian classic to begin with."
-                        : index === 1
-                          ? "A comforting curry for the table."
-                          : "A cool finish alongside your meal.")}
-                  </p>
-                  <Link href={`/order?item=${encodeURIComponent(item.id)}`}>
-                    Add to order <span>{item.price}</span> <Plus size={16} />
-                  </Link>
-                </article>
-              ))}
-            </div>
-          </section>
         )}
         <div className="menu-toolbar">
           <div
@@ -290,6 +271,42 @@ export default function MenuContent() {
               Show the full menu <ArrowUpRight size={17} />
             </button>
           </div>
+        )}
+        {inspiration.length > 0 && category === "all" && !query && (
+          <section
+            className="menu-inspiration"
+            aria-labelledby="menu-inspiration-title"
+          >
+            <div className="menu-inspiration-heading">
+              <div>
+                <span className="eyebrow">NOT SURE WHERE TO BEGIN?</span>
+                <h2 id="menu-inspiration-title">A little inspiration.</h2>
+                <p>A few ways to start your table order.</p>
+              </div>
+              <Link href="/order">
+                Build your order <ArrowUpRight size={17} />
+              </Link>
+            </div>
+            <div className="menu-inspiration-grid">
+              {inspiration.map((item, index) => (
+                <article key={item.id} className="menu-inspiration-card">
+                  <span className="menu-inspiration-number">0{index + 1}</span>
+                  <h3>{item.name}</h3>
+                  <p>
+                    {item.description ||
+                      (index === 0
+                        ? "A South Indian classic to begin with."
+                        : index === 1
+                          ? "A comforting curry for the table."
+                          : "A cool finish alongside your meal.")}
+                  </p>
+                  <Link href={`/order?item=${encodeURIComponent(item.id)}`}>
+                    Add to order <span>{item.price}</span> <Plus size={16} />
+                  </Link>
+                </article>
+              ))}
+            </div>
+          </section>
         )}
         <div className="menu-disclaimer">
           <p>

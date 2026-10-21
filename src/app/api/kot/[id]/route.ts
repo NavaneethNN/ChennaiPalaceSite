@@ -2,6 +2,7 @@ import { db } from "@/lib/server/db";
 import { staff } from "@/lib/server/auth";
 import { assert, failure, uuid } from "@/lib/server/http";
 import { kotPdf } from "@/lib/server/kot";
+import { getPrinterSettings } from "@/lib/server/printers";
 export const runtime = "nodejs";
 export async function GET(
   request: Request,
@@ -30,9 +31,35 @@ export async function GET(
       "No items for this printer.",
       404,
     );
+    const settings = await getPrinterSettings();
+    const printerName =
+      destination === "kitchen"
+        ? settings.kitchen_printer
+        : destination === "cashier"
+          ? settings.cashier_printer
+          : undefined;
+    const paperSize =
+      destination === "kitchen"
+        ? settings.kitchen_paper_size
+        : destination === "cashier"
+          ? settings.cashier_paper_size
+          : undefined;
+
     const pdf = await kotPdf(
       { ...rows[0], items: items.rows },
       destination || undefined,
+      printerName || undefined,
+      paperSize || undefined,
+      {
+        kitchen: {
+          name: settings.kitchen_printer,
+          paperSize: settings.kitchen_paper_size,
+        },
+        cashier: {
+          name: settings.cashier_printer,
+          paperSize: settings.cashier_paper_size,
+        },
+      },
     );
     return new Response(new Uint8Array(pdf), {
       headers: {

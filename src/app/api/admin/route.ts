@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { db, transaction } from "@/lib/server/db";
 import { passwordHash, staff } from "@/lib/server/auth";
+import { getPrinterSettings, savePrinterSettings } from "@/lib/server/printers";
 import {
   assert,
   body,
@@ -13,7 +14,7 @@ export const runtime = "nodejs";
 export async function GET() {
   try {
     await staff(true);
-    const [menu, cashiers, tables] = await Promise.all([
+    const [menu, cashiers, tables, printers] = await Promise.all([
       db().query("SELECT * FROM palace.menu_items ORDER BY sort_order,name"),
       db().query(
         "SELECT id,name,pin,active FROM palace.cashiers ORDER BY created_at",
@@ -21,11 +22,13 @@ export async function GET() {
       db().query(
         "SELECT number,active FROM palace.restaurant_tables ORDER BY number",
       ),
+      getPrinterSettings(),
     ]);
     return json({
       menu: menu.rows,
       cashiers: cashiers.rows,
       tables: tables.rows,
+      printers,
     });
   } catch (error) {
     return failure(error);
@@ -164,6 +167,29 @@ export async function POST(request: Request) {
             ],
           );
       });
+    } else if (data.kind === "printer") {
+      assert(
+        typeof data.kitchen_printer === "string" &&
+          data.kitchen_printer.length <= 120,
+        "Kitchen printer name must be under 120 characters.",
+      );
+      assert(
+        typeof data.cashier_printer === "string" &&
+          data.cashier_printer.length <= 120,
+        "Cashier printer name must be under 120 characters.",
+      );
+      const user = await staff(true);
+      const kitchenPaper =
+        data.kitchen_paper_size === "58mm" ? "58mm" : "80mm";
+      const cashierPaper =
+        data.cashier_paper_size === "58mm" ? "58mm" : "80mm";
+      await savePrinterSettings(
+        data.kitchen_printer,
+        kitchenPaper,
+        data.cashier_printer,
+        cashierPaper,
+        user.name,
+      );
     } else assert(false, "Invalid operation.");
     return json({ ok: true });
   } catch (error) {

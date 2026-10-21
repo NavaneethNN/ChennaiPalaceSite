@@ -9,7 +9,9 @@
     "lint": "eslint src --ext .ts,.tsx",
     "db:setup": "node scripts/setup-db.mjs",
     "test:restaurant": "node tests/restaurant.mjs",
-    "test:customer": "node tests/customer-menu.mjs"
+    "test:customer": "node tests/customer-menu.mjs",
+    "test:customer-session": "node tests/customer-session.mjs",
+    "test:printers": "node tests/printers.mjs"
   },
   "dependencies": {
     "clsx": "^2.1.1",

@@ -301,6 +301,14 @@ button:disabled {
   background: #fae9e8;
   color: #a34441;
 }
+.ops-badge.offline {
+  background: #fae9e8;
+  color: #a34441;
+}
+.ops-badge.warning {
+  background: #fff3df;
+  color: #94600b;
+}
 .ops-order-items > div {
   display: flex;
   justify-content: space-between;
@@ -927,6 +935,133 @@ button:disabled {
   font-size: 12px;
   color: #777;
 }
+.ops-printer-workspace {
+  display: grid;
+  gap: 22px;
+}
+.ops-printer-stats {
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+.ops-printer-stats > div {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  min-height: 140px;
+}
+.ops-printer-stat-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+}
+.ops-printer-stat-actions a.ops-button {
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+}
+.ops-printer-form {
+  margin-top: 16px;
+}
+.ops-printer-help-box {
+  margin-top: 22px;
+  padding: 16px;
+  background: #fdfafd;
+  border: 1px solid #ebdfee;
+  border-radius: 10px;
+}
+.ops-printer-help-box h3 {
+  font-size: 13px;
+  margin: 0 0 6px;
+  color: #542449;
+}
+.ops-printer-help-box p {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #726277;
+  margin: 0;
+}
+.ops-detected-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 14px;
+}
+.ops-detected-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 16px;
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  transition: border-color 0.15s ease;
+}
+.ops-detected-item:hover {
+  border-color: #bfa1be;
+}
+.ops-detected-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ops-detected-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ops-detected-title strong {
+  font-size: 14px;
+  color: #2b1f30;
+}
+.ops-detected-info small {
+  font-size: 11px;
+  color: #8c7c91;
+}
+.ops-detected-tags {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+.ops-detected-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.ops-printer-guide {
+  margin-top: 22px;
+  padding: 16px;
+  background: #fbf9fa;
+  border-left: 3px solid #743b6b;
+  border-radius: 6px;
+}
+.ops-printer-guide h4 {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #542449;
+  margin: 0 0 8px;
+}
+.ops-printer-guide ul {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 11px;
+  color: #6d5b72;
+  line-height: 1.6;
+}
+.ops-printer-guide li {
+  margin-bottom: 4px;
+}
+.ops-printer-guide code {
+  background: #eee8f1;
+  padding: 2px 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-family: monospace;
+}
 @media (min-width: 1800px) {
   .ops-content {
     padding: 45px;
@@ -1162,4 +1297,29 @@ button:disabled {
 .ops-sidebar button:focus-visible {
   outline: 3px solid #bd86b5;
   outline-offset: 3px;
+}
+
+/* Reserve queue space so live arrivals cannot move the table workspace. */
+.ops-incoming-list {
+  height: clamp(280px, 50dvh, 560px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: 2px 6px 2px 2px;
+}
+.ops-incoming-list:focus-visible {
+  outline: 2px solid #98628f;
+  outline-offset: 3px;
+  border-radius: 6px;
+}
+.ops-incoming-list > .ops-order:last-child {
+  margin-bottom: 0;
+}
+.ops-incoming-panel .ops-panel-heading {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+.ops-incoming-panel .ops-panel-heading > small {
+  min-height: 15px;
 }

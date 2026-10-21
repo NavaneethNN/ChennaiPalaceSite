@@ -83,3 +83,23 @@ $$ LANGUAGE plpgsql;
 DROP TRIGGER IF EXISTS bump_version ON palace.menu_items;
 CREATE TRIGGER bump_version BEFORE UPDATE ON palace.menu_items
  FOR EACH ROW EXECUTE FUNCTION palace.menu_version();
+
+-- Printer configuration for kitchen and cashier
+CREATE TABLE IF NOT EXISTS palace.printer_settings (
+ id integer PRIMARY KEY CHECK (id = 1),
+ kitchen_printer text NOT NULL DEFAULT '',
+ kitchen_paper_size text NOT NULL DEFAULT '80mm' CHECK (kitchen_paper_size IN ('80mm', '58mm')),
+ cashier_printer text NOT NULL DEFAULT '',
+ cashier_paper_size text NOT NULL DEFAULT '80mm' CHECK (cashier_paper_size IN ('80mm', '58mm')),
+ updated_at timestamptz NOT NULL DEFAULT now(),
+ updated_by text
+);
+ALTER TABLE palace.printer_settings ADD COLUMN IF NOT EXISTS kitchen_paper_size text NOT NULL DEFAULT '80mm';
+ALTER TABLE palace.printer_settings ADD COLUMN IF NOT EXISTS cashier_paper_size text NOT NULL DEFAULT '80mm';
+INSERT INTO palace.printer_settings (id, kitchen_printer, kitchen_paper_size, cashier_printer, cashier_paper_size)
+ VALUES (1, '', '80mm', '', '80mm')
+ ON CONFLICT (id) DO NOTHING;
+
+DROP TRIGGER IF EXISTS live_change ON palace.printer_settings;
+CREATE TRIGGER live_change AFTER INSERT OR UPDATE OR DELETE ON palace.printer_settings
+ FOR EACH STATEMENT EXECUTE FUNCTION palace.notify_change();
