@@ -12,7 +12,8 @@
     "test:customer": "node tests/customer-menu.mjs",
     "test:customer-session": "node tests/customer-session.mjs",
     "test:printers": "node tests/printers.mjs",
-    "test:qr-security": "node tests/table-qr-security.mjs"
+    "test:qr-security": "node tests/table-qr-security.mjs",
+    "test:printer-download": "node tests/printer-setup-download.mjs"
   },
   "dependencies": {
     "@types/qrcode": "^1.5.6",

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { db, transaction } from "@/lib/server/db";
 import { hash } from "@/lib/server/auth";
+import { liveUpdates } from "@/lib/server/live";
 import {
   assert,
   body,
@@ -169,6 +170,9 @@ export async function POST(request: Request) {
       );
       return { id };
     });
+    try {
+      liveUpdates.emit();
+    } catch {}
     return json(result);
   } catch (error) {
     return failure(error);

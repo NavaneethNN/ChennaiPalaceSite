@@ -1,5 +1,6 @@
 import { transaction } from "@/lib/server/db";
 import { staff } from "@/lib/server/auth";
+import { liveUpdates } from "@/lib/server/live";
 import {
   assert,
   body,
@@ -130,6 +131,9 @@ export async function POST(request: Request) {
         ...(data.action === "accept" ? { kot_url: `/api/kot/${data.id}` } : {}),
       };
     });
+    try {
+      liveUpdates.emit();
+    } catch {}
     return json(result);
   } catch (error) {
     return failure(error);

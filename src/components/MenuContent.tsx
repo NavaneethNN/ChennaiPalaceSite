@@ -52,7 +52,9 @@ export default function MenuContent() {
     } catch {}
     try {
       const saved = JSON.parse(
-        sessionStorage.getItem("palace_customer_session") || "null",
+        sessionStorage.getItem("palace_customer_session") ||
+          localStorage.getItem("palace_customer_session") ||
+          "null",
       );
       if (Number.isInteger(saved?.table) && typeof saved?.token === "string") {
         setSessionTable(saved.table);

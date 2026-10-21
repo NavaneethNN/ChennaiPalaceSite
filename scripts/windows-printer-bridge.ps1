@@ -45,6 +45,52 @@ try {
     }
 }
 
+function Get-InstalledPrintersList {
+    $results = @()
+    try {
+        $raw = Get-CimInstance -ClassName Win32_Printer -ErrorAction Stop
+        foreach ($p in $raw) {
+            if ($p -and $p.Name) {
+                $results += @{
+                    name = [string]$p.Name
+                    is_default = [bool]$p.Default
+                    port = if ($p.PortName) { [string]$p.PortName } else { "" }
+                }
+            }
+        }
+        return $results
+    } catch {}
+
+    try {
+        $raw = Get-Printer -ErrorAction Stop
+        foreach ($p in $raw) {
+            if ($p -and $p.Name) {
+                $results += @{
+                    name = [string]$p.Name
+                    is_default = [bool]($p.Type -eq "Default")
+                    port = if ($p.PortName) { [string]$p.PortName } else { "" }
+                }
+            }
+        }
+        return $results
+    } catch {}
+
+    try {
+        $raw = Get-WmiObject -Class Win32_Printer -ErrorAction SilentlyContinue
+        foreach ($p in $raw) {
+            if ($p -and $p.Name) {
+                $results += @{
+                    name = [string]$p.Name
+                    is_default = [bool]$p.Default
+                    port = if ($p.PortName) { [string]$p.PortName } else { "" }
+                }
+            }
+        }
+    } catch {}
+
+    return $results
+}
+
 try {
     Write-Host "==========================================================" -ForegroundColor Green
     Write-Host "  Chennai Palace - Windows Printer Bridge is ACTIVE" -ForegroundColor Green
@@ -84,10 +130,11 @@ try {
         $request = $context.Request
         $response = $context.Response
 
-        # Allow Web Browser to communicate with localhost and across LAN (CORS)
+        # Allow Web Browser to communicate with localhost and across LAN (CORS & Private Network Access)
         $response.AddHeader("Access-Control-Allow-Origin", "*")
         $response.AddHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         $response.AddHeader("Access-Control-Allow-Headers", "*")
+        $response.AddHeader("Access-Control-Allow-Private-Network", "true")
         $response.AddHeader("Access-Control-Max-Age", "86400")
 
         if ($request.HttpMethod -eq "OPTIONS") {
@@ -99,17 +146,11 @@ try {
         # Route 1: List installed Windows printers
         if ($request.Url.AbsolutePath -eq "/printers" -and $request.HttpMethod -eq "GET") {
             try {
-                $printers = Get-CimInstance -ClassName Win32_Printer | Select-Object Name, Default, PortName
-                $items = @()
-                foreach ($p in $printers) {
-                    $items += @{
-                        name = $p.Name
-                        is_default = [bool]$p.Default
-                        port = $p.PortName
-                    }
-                }
-                $json = ConvertTo-Json -InputObject $items -Compress
-                if (-not $json.StartsWith("[")) {
+                $items = Get-InstalledPrintersList
+                $json = ConvertTo-Json -InputObject @($items) -Compress
+                if ([string]::IsNullOrWhiteSpace($json) -or $json -eq "null") {
+                    $json = "[]"
+                } elseif (-not $json.StartsWith("[")) {
                     $json = "[$json]"
                 }
             } catch {
@@ -127,40 +168,56 @@ try {
                 $body = $reader.ReadToEnd()
                 $payload = ConvertFrom-Json $body
 
-                $requestedPrinter = $payload.printer
-                $printText = $payload.text
-                $orderId = $payload.orderId
-                $dest = $payload.destination
+                $requestedPrinter = [string]$payload.printer
+                $printText = [string]$payload.text
+                $orderId = [string]$payload.orderId
+                $dest = [string]$payload.destination
 
                 # Fetch available printers to resolve target
-                $allPrinters = Get-CimInstance -ClassName Win32_Printer | Select-Object -ExpandProperty Name
-                $targetPrinter = $null
+                $allPrintersData = Get-InstalledPrintersList
+                $allNames = @()
+                foreach ($p in $allPrintersData) {
+                    if ($p.name) { $allNames += $p.name }
+                }
 
-                if ($requestedPrinter) {
+                $targetPrinter = $null
+                if ($requestedPrinter -and $requestedPrinter.Trim()) {
+                    $cleanReq = $requestedPrinter.Trim()
                     # Exact match
-                    $targetPrinter = $allPrinters | Where-Object { $_ -eq $requestedPrinter }
+                    $targetPrinter = $allNames | Where-Object { $_ -eq $cleanReq } | Select-Object -First 1
                     if (-not $targetPrinter) {
-                        # Case-insensitive or partial match
-                        $targetPrinter = $allPrinters | Where-Object { $_ -like "*$requestedPrinter*" } | Select-Object -First 1
+                        # Case-insensitive / partial match
+                        $targetPrinter = $allNames | Where-Object { $_ -like "*$cleanReq*" } | Select-Object -First 1
                     }
                 }
 
                 if (-not $targetPrinter) {
                     # Fallback to Windows default printer
-                    $defaultPrn = Get-CimInstance -ClassName Win32_Printer -Filter "Default = True"
-                    $targetPrinter = $defaultPrn.Name
+                    $defItem = $allPrintersData | Where-Object { $_.is_default -eq $true } | Select-Object -First 1
+                    if ($defItem) {
+                        $targetPrinter = $defItem.name
+                    }
+                }
+
+                if (-not $targetPrinter -and $allNames.Count -gt 0) {
+                    $targetPrinter = $allNames[0]
                 }
 
                 if (-not $targetPrinter) {
-                    throw "No suitable Windows printer found on this system."
+                    throw "No suitable Windows printer found on this system. Please check printer connection."
                 }
 
                 # Send text directly to Windows print spooler via Out-Printer
-                # Write to UTF-8 temp file first to ensure full character encoding integrity
-                $tempPath = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "kot-$([System.Guid]::NewGuid().ToString()).txt")
-                [System.IO.File]::WriteAllText($tempPath, $printText, [System.Text.Encoding]::UTF8)
-                Get-Content -Path $tempPath -Raw -Encoding UTF8 | Out-Printer -Name $targetPrinter
-                Remove-Item -Path $tempPath -Force -ErrorAction SilentlyContinue
+                try {
+                    $lines = $printText -split "`r?`n"
+                    $lines | Out-Printer -Name $targetPrinter -ErrorAction Stop
+                } catch {
+                    # Fallback via UTF-8 temp file
+                    $tempPath = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "kot-$([System.Guid]::NewGuid().ToString()).txt")
+                    [System.IO.File]::WriteAllText($tempPath, $printText, [System.Text.Encoding]::UTF8)
+                    Get-Content -Path $tempPath -Raw -Encoding UTF8 | Out-Printer -Name $targetPrinter
+                    Remove-Item -Path $tempPath -Force -ErrorAction SilentlyContinue
+                }
 
                 $timeStr = [DateTime]::Now.ToString("HH:mm:ss")
                 Write-Host "[$timeStr] PRINT JOB OK: Order #$orderId -> $targetPrinter ($dest)" -ForegroundColor Green
@@ -192,7 +249,15 @@ try {
                 $response.OutputStream.Write($buffer, 0, $buffer.Length)
             }
         } else {
-            $msg = '{"status":"ok","app":"Chennai Palace Printer Bridge v2"}'
+            $statusObj = @{
+                status = "ok"
+                app = "Chennai Palace Printer Bridge"
+                version = "2.1.0"
+                lanMode = $isLanMode
+                localIPs = $localIPs
+                timestamp = (Get-Date).ToString("o")
+            }
+            $msg = ConvertTo-Json -InputObject $statusObj -Compress
             $buffer = [System.Text.Encoding]::UTF8.GetBytes($msg)
             $response.ContentType = "application/json; charset=utf-8"
             $response.ContentLength64 = $buffer.Length

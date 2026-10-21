@@ -100,3 +100,4 @@ export async function saveTable(tableNumber: number, active: boolean): Promise<R
   );
   return rows[0];
 }
+

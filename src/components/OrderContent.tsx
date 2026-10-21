@@ -227,13 +227,17 @@ export default function OrderContent() {
     }
 
     try {
-      const saved = sessionStorage.getItem("palace_order");
+      const saved =
+        sessionStorage.getItem("palace_order") ||
+        localStorage.getItem("palace_order");
       if (saved) {
         const value = JSON.parse(saved);
         if (!params.get("item")) setReceipt(value);
         setTable(String(value.table));
       }
-      const savedSession = sessionStorage.getItem("palace_customer_session");
+      const savedSession =
+        sessionStorage.getItem("palace_customer_session") ||
+        localStorage.getItem("palace_customer_session");
       if (savedSession) {
         const value = JSON.parse(savedSession);
         if (Number.isInteger(value.table) && typeof value.token === "string")
@@ -290,6 +294,7 @@ export default function OrderContent() {
           setCustomerSession(null);
           try {
             sessionStorage.removeItem("palace_customer_session");
+            localStorage.removeItem("palace_customer_session");
           } catch {}
         } else {
           setHistory(data);
@@ -506,10 +511,15 @@ export default function OrderContent() {
             "palace_customer_session",
             JSON.stringify(owner),
           );
+          localStorage.setItem(
+            "palace_customer_session",
+            JSON.stringify(owner),
+          );
         } catch {}
       }
       try {
         sessionStorage.setItem("palace_order", JSON.stringify(value));
+        localStorage.setItem("palace_order", JSON.stringify(value));
       } catch {}
       setCart({});
       setNotes("");
@@ -524,10 +534,16 @@ export default function OrderContent() {
     if (receipt && !closed) setTable(String(receipt.table));
     setReceipt(null);
     setTrackedOrder(null);
-    sessionStorage.removeItem("palace_order");
+    try {
+      sessionStorage.removeItem("palace_order");
+      localStorage.removeItem("palace_order");
+    } catch {}
     if (closed) {
       setCustomerSession(null);
-      sessionStorage.removeItem("palace_customer_session");
+      try {
+        sessionStorage.removeItem("palace_customer_session");
+        localStorage.removeItem("palace_customer_session");
+      } catch {}
     }
     api<MenuItem[]>("/api/menu")
       .then(setMenu)

@@ -210,11 +210,17 @@ export function enqueueOrderPrint(
   destinations?: Array<"kitchen" | "cashier">,
 ) {
   const targetDests = destinations || [
-    ...new Set(order.items.map((i) => i.printer)),
+    ...new Set(
+      order.items.map((i) =>
+        i.printer === "cashier" ? ("cashier" as const) : ("kitchen" as const),
+      ),
+    ),
   ];
 
   for (const dest of targetDests) {
-    const hasItems = order.items.some((i) => i.printer === dest);
+    const hasItems = order.items.some(
+      (i) => (i.printer === "cashier" ? "cashier" : "kitchen") === dest,
+    );
     if (!hasItems) continue;
 
     notifyStatus(order.id, dest, "queued");

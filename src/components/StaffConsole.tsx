@@ -22,6 +22,10 @@ import {
   QrCode,
   Copy,
   Check,
+  Download,
+  FileDown,
+  Volume2,
+  VolumeX,
 } from "lucide-react";
 import QRCode from "qrcode";
 import { api, send } from "@/lib/client-api";
@@ -139,10 +143,134 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
     Record<string, OrderPrintStatus>
   >({});
   const [autoPrint, setAutoPrint] = useState(true);
+  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [downloadingSetup, setDownloadingSetup] = useState(false);
+  const previousPendingCount = useRef<number | null>(null);
   const refreshing = useRef(false);
   const refreshAgain = useRef(false);
   const [live, setLive] = useState(false);
   const [updated, setUpdated] = useState("");
+
+  // Persistent settings from localStorage
+  useEffect(() => {
+    try {
+      const savedAutoPrint = localStorage.getItem("palace_auto_print");
+      if (savedAutoPrint !== null) setAutoPrint(savedAutoPrint === "true");
+      const savedSound = localStorage.getItem("palace_sound_enabled");
+      if (savedSound !== null) setSoundEnabled(savedSound === "true");
+    } catch {}
+  }, []);
+
+  const handleSetAutoPrint = (val: boolean) => {
+    setAutoPrint(val);
+    try {
+      localStorage.setItem("palace_auto_print", String(val));
+    } catch {}
+  };
+
+  const handleSetSoundEnabled = (val: boolean) => {
+    setSoundEnabled(val);
+    try {
+      localStorage.setItem("palace_sound_enabled", String(val));
+    } catch {}
+  };
+
+  const playOrderChime = useCallback(() => {
+    if (!soundEnabled || typeof window === "undefined") return;
+    try {
+      const AudioCtx =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext: typeof AudioContext })
+          .webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      if (ctx.state === "suspended") void ctx.resume();
+
+      const now = ctx.currentTime;
+      const osc1 = ctx.createOscillator();
+      const gain1 = ctx.createGain();
+      osc1.type = "sine";
+      osc1.frequency.setValueAtTime(587.33, now); // D5
+      osc1.frequency.exponentialRampToValueAtTime(880, now + 0.12); // A5
+      gain1.gain.setValueAtTime(0.25, now);
+      gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
+      osc1.connect(gain1);
+      gain1.connect(ctx.destination);
+      osc1.start(now);
+      osc1.stop(now + 0.45);
+
+      const osc2 = ctx.createOscillator();
+      const gain2 = ctx.createGain();
+      osc2.type = "sine";
+      osc2.frequency.setValueAtTime(1046.5, now + 0.15); // C6
+      gain2.gain.setValueAtTime(0.28, now + 0.15);
+      gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.65);
+      osc2.connect(gain2);
+      gain2.connect(ctx.destination);
+      osc2.start(now + 0.15);
+      osc2.stop(now + 0.65);
+    } catch {}
+  }, [soundEnabled]);
+
+  const downloadPrinterSetup = useCallback(
+    (mode: "both" | "zip" | "bat" | "ps1" = "both") => {
+      if (mode === "zip") {
+        const a = document.createElement("a");
+        a.href = "/api/admin/printers/download?file=chennai-palace-printer-bridge.zip";
+        a.download = "chennai-palace-printer-bridge.zip";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setNotice(
+          "Downloaded chennai-palace-printer-bridge.zip. Extract and double-click windows-printer-bridge.bat.",
+        );
+        return;
+      }
+
+      if (mode === "bat") {
+        const a = document.createElement("a");
+        a.href = "/api/admin/printers/download?file=windows-printer-bridge.bat";
+        a.download = "windows-printer-bridge.bat";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        return;
+      }
+
+      if (mode === "ps1") {
+        const a = document.createElement("a");
+        a.href = "/api/admin/printers/download?file=windows-printer-bridge.ps1";
+        a.download = "windows-printer-bridge.ps1";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        return;
+      }
+
+      // mode === "both": automatically triggers download of both .bat and .ps1 to the Windows device
+      setDownloadingSetup(true);
+      const aBat = document.createElement("a");
+      aBat.href = "/api/admin/printers/download?file=windows-printer-bridge.bat";
+      aBat.download = "windows-printer-bridge.bat";
+      document.body.appendChild(aBat);
+      aBat.click();
+      document.body.removeChild(aBat);
+
+      setTimeout(() => {
+        const aPs1 = document.createElement("a");
+        aPs1.href = "/api/admin/printers/download?file=windows-printer-bridge.ps1";
+        aPs1.download = "windows-printer-bridge.ps1";
+        document.body.appendChild(aPs1);
+        aPs1.click();
+        document.body.removeChild(aPs1);
+        setDownloadingSetup(false);
+        setNotice(
+          "Downloaded windows-printer-bridge.bat and windows-printer-bridge.ps1. On your Windows PC, double-click windows-printer-bridge.bat to start.",
+        );
+      }, 350);
+    },
+    [],
+  );
   useEffect(() => {
     const unsub = subscribePrintStatus(setPrintStatuses);
     void checkWindowsBridge(printerSettings.bridge_host).then((ok) => setBridgeConnected(ok));
@@ -205,6 +333,16 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
         refreshAgain.current = false;
         const data = await api<TableSession[]>("/api/operations");
         setTables(data);
+        const pendingCount = data.flatMap((t) =>
+          t.orders.filter((o) => o.status === "pending"),
+        ).length;
+        if (
+          previousPendingCount.current !== null &&
+          pendingCount > previousPendingCount.current
+        ) {
+          playOrderChime();
+        }
+        previousPendingCount.current = pendingCount;
         setUpdated(
           new Date().toLocaleTimeString("en-AU", {
             hour: "2-digit",
@@ -216,7 +354,7 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
     } finally {
       refreshing.current = false;
     }
-  }, []);
+  }, [playOrderChime]);
   const loadAdmin = useCallback(async () => {
     const data = await api<{
       menu: MenuItem[];
@@ -1259,23 +1397,64 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
                         {bridgeConnected && " · ⚡ Thermal bridge connected"}
                       </small>
                     </div>
-                    <label
-                      className="ops-checkbox"
+                    <div
                       style={{
-                        margin: 0,
-                        fontSize: "11px",
-                        gap: "6px",
-                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "12px",
+                        flexWrap: "wrap",
                       }}
-                      title="Automatically print KOT to thermal printers when order is accepted"
                     >
-                      <input
-                        type="checkbox"
-                        checked={autoPrint}
-                        onChange={(e) => setAutoPrint(e.target.checked)}
-                      />
-                      <span>Auto-print KOT on accept</span>
-                    </label>
+                      <label
+                        className="ops-checkbox"
+                        style={{
+                          margin: 0,
+                          fontSize: "11px",
+                          gap: "6px",
+                          cursor: "pointer",
+                        }}
+                        title="Automatically print KOT to thermal printers when order is accepted"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={autoPrint}
+                          onChange={(e) => handleSetAutoPrint(e.target.checked)}
+                        />
+                        <span>Auto-print KOT on accept</span>
+                      </label>
+                      <label
+                        className="ops-checkbox"
+                        style={{
+                          margin: 0,
+                          fontSize: "11px",
+                          gap: "6px",
+                          cursor: "pointer",
+                        }}
+                        title="Play chime sound when a new customer order arrives"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={soundEnabled}
+                          onChange={(e) =>
+                            handleSetSoundEnabled(e.target.checked)
+                          }
+                        />
+                        <span
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "4px",
+                          }}
+                        >
+                          {soundEnabled ? (
+                            <Volume2 size={13} />
+                          ) : (
+                            <VolumeX size={13} />
+                          )}
+                          Chime
+                        </span>
+                      </label>
+                    </div>
                   </div>
                   <div
                     className="ops-incoming-list"
@@ -1726,6 +1905,150 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
                         className={scanningPrinters ? "animate-spin" : ""}
                       />
                       {scanningPrinters ? "Scanning…" : "Scan"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div
+                className="ops-panel"
+                style={{
+                  marginBottom: "20px",
+                  background:
+                    "linear-gradient(135deg, rgba(75, 27, 65, 0.04) 0%, rgba(200, 143, 74, 0.08) 100%)",
+                  borderColor: "rgba(75, 27, 65, 0.16)",
+                  display: "flex",
+                  flexWrap: "wrap",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: "16px",
+                  padding: "18px 22px",
+                }}
+              >
+                <div style={{ maxWidth: "620px" }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "10px",
+                      marginBottom: "6px",
+                    }}
+                  >
+                    <Download size={20} style={{ color: "var(--plum)" }} />
+                    <h3
+                      style={{
+                        margin: 0,
+                        fontSize: "15px",
+                        fontWeight: 600,
+                        color: "var(--plum)",
+                      }}
+                    >
+                      Windows Thermal Printer Bridge Setup
+                    </h3>
+                    <span
+                      className="ops-badge"
+                      style={{
+                        background: bridgeConnected ? "#16a34a" : "#f59e0b",
+                        color: "#fff",
+                      }}
+                    >
+                      {bridgeConnected
+                        ? "Bridge Active on Port 18080"
+                        : "Ready to Download"}
+                    </span>
+                  </div>
+                  <p
+                    style={{
+                      margin: 0,
+                      fontSize: "12px",
+                      color: "var(--muted)",
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    Connect both thermal printers (Kitchen &amp; Cashier) to your
+                    Windows POS computer. Download the setup files, run{" "}
+                    <code>windows-printer-bridge.bat</code>, and your printers will
+                    instantly be detected for continuous thermal printing.
+                  </p>
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    alignItems: "center",
+                    gap: "10px",
+                  }}
+                >
+                  <button
+                    type="button"
+                    className="ops-button"
+                    disabled={downloadingSetup}
+                    onClick={() => downloadPrinterSetup("both")}
+                    title="Automatically downloads windows-printer-bridge.bat and windows-printer-bridge.ps1 to this PC"
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "8px",
+                    }}
+                  >
+                    <Download size={15} />
+                    {downloadingSetup
+                      ? "Downloading files…"
+                      : "Download printer setup (.bat & .ps1)"}
+                  </button>
+                  <button
+                    type="button"
+                    className="ops-button secondary"
+                    onClick={() => downloadPrinterSetup("zip")}
+                    title="Download both scripts and instructions as a single .zip archive"
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "6px",
+                    }}
+                  >
+                    <FileDown size={14} />
+                    Download .ZIP package
+                  </button>
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: "8px",
+                      fontSize: "11px",
+                      color: "var(--muted)",
+                      marginLeft: "4px",
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => downloadPrinterSetup("bat")}
+                      style={{
+                        background: "none",
+                        border: "none",
+                        textDecoration: "underline",
+                        cursor: "pointer",
+                        color: "inherit",
+                        padding: 0,
+                        fontSize: "inherit",
+                      }}
+                    >
+                      .bat only
+                    </button>
+                    <span>•</span>
+                    <button
+                      type="button"
+                      onClick={() => downloadPrinterSetup("ps1")}
+                      style={{
+                        background: "none",
+                        border: "none",
+                        textDecoration: "underline",
+                        cursor: "pointer",
+                        color: "inherit",
+                        padding: 0,
+                        fontSize: "inherit",
+                      }}
+                    >
+                      .ps1 only
                     </button>
                   </div>
                 </div>

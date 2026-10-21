@@ -22,10 +22,10 @@ export async function GET(
     );
 
     const { rows } = await db().query(
-      `SELECT o.*,s.table_number FROM palace.orders o JOIN palace.table_sessions s ON s.id=o.session_id WHERE o.id=$1 AND o.status='accepted'`,
+      `SELECT o.*,s.table_number FROM palace.orders o JOIN palace.table_sessions s ON s.id=o.session_id WHERE o.id=$1 AND o.status != 'rejected'`,
       [id],
     );
-    assert(rows[0], "Accepted order not found.", 404);
+    assert(rows[0], "Order not found.", 404);
 
     const items = await db().query(
       "SELECT * FROM palace.order_items WHERE order_id=$1 ORDER BY id",
