@@ -35,7 +35,11 @@ export type TableSession = {
   orders: Order[];
   total_cents: number;
 };
-export type RestaurantTable = { number: number; active: boolean };
+export type RestaurantTable = {
+  number: number;
+  active: boolean;
+  qr_code?: string;
+};
 export type Staff = {
   role: "admin" | "cashier";
   name: string;

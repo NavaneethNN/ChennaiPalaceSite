@@ -19,7 +19,11 @@ import {
   Search,
   LayoutDashboard,
   Grid3X3,
+  QrCode,
+  Copy,
+  Check,
 } from "lucide-react";
+import QRCode from "qrcode";
 import { api, send } from "@/lib/client-api";
 import {
   money,
@@ -106,6 +110,11 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
   const [cashierDraft, setCashierDraft] = useState<CashierDraft | null>(null);
   const [closing, setClosing] = useState<TableSession | null>(null);
   const [lastKot, setLastKot] = useState<string | null>(null);
+  const [qrTable, setQrTable] = useState<RestaurantTable | null>(null);
+  const [qrDataUrl, setQrDataUrl] = useState<string>("");
+  const [qrCopied, setQrCopied] = useState(false);
+  const [printAllQrOpen, setPrintAllQrOpen] = useState(false);
+  const [allQrDataUrls, setAllQrDataUrls] = useState<Record<number, string>>({});
   const [printerSettings, setPrinterSettings] = useState<PrinterSettings>({
     kitchen_printer: "",
     kitchen_paper_size: "80mm",
@@ -139,6 +148,43 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
     void checkWindowsBridge(printerSettings.bridge_host).then((ok) => setBridgeConnected(ok));
     return unsub;
   }, [printerSettings.bridge_host]);
+  useEffect(() => {
+    if (qrTable && qrTable.qr_code) {
+      const origin =
+        typeof window !== "undefined" ? window.location.origin : "";
+      const url = `${origin}/order?table=${qrTable.number}&code=${qrTable.qr_code}`;
+      QRCode.toDataURL(url, {
+        width: 320,
+        margin: 2,
+        errorCorrectionLevel: "M",
+      })
+        .then(setQrDataUrl)
+        .catch(console.error);
+    } else {
+      setQrDataUrl("");
+    }
+  }, [qrTable]);
+  useEffect(() => {
+    if (!printAllQrOpen) return;
+    const origin =
+      typeof window !== "undefined" ? window.location.origin : "";
+    const map: Record<number, string> = {};
+    Promise.all(
+      configuredTables
+        .filter((t) => t.active && t.qr_code)
+        .map(async (t) => {
+          const url = `${origin}/order?table=${t.number}&code=${t.qr_code}`;
+          const dataUrl = await QRCode.toDataURL(url, {
+            width: 320,
+            margin: 2,
+            errorCorrectionLevel: "M",
+          });
+          map[t.number] = dataUrl;
+        }),
+    )
+      .then(() => setAllQrDataUrls(map))
+      .catch(console.error);
+  }, [printAllQrOpen, configuredTables]);
   useEffect(() => {
     api<Staff>("/api/auth")
       .then((u) => {
@@ -1446,11 +1492,37 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
           {tab === "tables" && (
             <section className="ops-panel">
               <div className="ops-panel-heading">
-                <h2>Configured tables</h2>
-                <span>
-                  {configuredTables.filter((table) => table.active).length}{" "}
-                  available
-                </span>
+                <div>
+                  <h2>Configured tables</h2>
+                  <p
+                    className="ops-muted"
+                    style={{ margin: "2px 0 0", fontSize: "12px" }}
+                  >
+                    Each table has a dedicated, secure QR code required for
+                    customers to place orders.
+                  </p>
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    gap: "10px",
+                    alignItems: "center",
+                  }}
+                >
+                  <span>
+                    {configuredTables.filter((table) => table.active).length}{" "}
+                    available
+                  </span>
+                  {configuredTables.some((t) => t.active) && (
+                    <button
+                      type="button"
+                      className="ops-button secondary small"
+                      onClick={() => setPrintAllQrOpen(true)}
+                    >
+                      <QrCode size={14} /> Print all QR stands
+                    </button>
+                  )}
+                </div>
               </div>
               {configuredTables.length ? (
                 <div className="ops-config-grid">
@@ -1465,17 +1537,27 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
                             : "Hidden from customers"}
                         </span>
                       </div>
-                      <button
-                        className="ops-button secondary small"
-                        disabled={Boolean(actionBusy)}
-                        onClick={() => toggleTable(table)}
-                      >
-                        {actionBusy === `table-${table.number}`
-                          ? "Saving…"
-                          : table.active
-                            ? "Hide"
-                            : "Enable"}
-                      </button>
+                      <div style={{ display: "flex", gap: "6px" }}>
+                        <button
+                          type="button"
+                          className="ops-button secondary small"
+                          onClick={() => setQrTable(table)}
+                          title="Generate & View Table QR Code"
+                        >
+                          <QrCode size={13} /> QR Code
+                        </button>
+                        <button
+                          className="ops-button secondary small"
+                          disabled={Boolean(actionBusy)}
+                          onClick={() => toggleTable(table)}
+                        >
+                          {actionBusy === `table-${table.number}`
+                            ? "Saving…"
+                            : table.active
+                              ? "Hide"
+                              : "Enable"}
+                        </button>
+                      </div>
                     </article>
                   ))}
                 </div>
@@ -2335,6 +2417,477 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
                 onClick={closeSession}
               >
                 {busy ? "Closing…" : "Billing done · close session"}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+      {qrTable && (
+        <div className="ops-modal-overlay">
+          <section
+            className="ops-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="qr-table-dialog"
+            style={{ maxWidth: "480px", textAlign: "center" }}
+          >
+            <div className="ops-modal-heading">
+              <h2 id="qr-table-dialog">Table {qrTable.number} QR Stand</h2>
+              <button
+                aria-label="Close dialog"
+                disabled={busy}
+                onClick={() => {
+                  setQrTable(null);
+                  setQrCopied(false);
+                }}
+              >
+                ×
+              </button>
+            </div>
+
+            <div
+              className="ops-qr-stand-preview"
+              style={{
+                background: "#fffdf9",
+                border: "2px solid #eadbd2",
+                borderRadius: "16px",
+                padding: "24px 20px",
+                margin: "10px 0 20px",
+                boxShadow: "0 4px 20px rgba(0,0,0,0.06)",
+              }}
+            >
+              <span className="eyebrow" style={{ letterSpacing: "2px" }}>
+                CHENNAI PALACE · DINE IN
+              </span>
+              <h3
+                style={{
+                  fontSize: "32px",
+                  margin: "6px 0 16px",
+                  color: "var(--purple)",
+                  fontFamily: "var(--serif, serif)",
+                }}
+              >
+                TABLE {qrTable.number}
+              </h3>
+
+              {qrDataUrl ? (
+                <div
+                  style={{
+                    background: "white",
+                    padding: "12px",
+                    borderRadius: "12px",
+                    display: "inline-block",
+                    border: "1px solid #eee",
+                    boxShadow: "0 2px 10px rgba(0,0,0,0.04)",
+                  }}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={qrDataUrl}
+                    alt={`QR code for Table ${qrTable.number}`}
+                    style={{
+                      width: "220px",
+                      height: "220px",
+                      display: "block",
+                    }}
+                  />
+                </div>
+              ) : (
+                <div
+                  style={{
+                    width: "220px",
+                    height: "220px",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    margin: "0 auto",
+                  }}
+                >
+                  <RefreshCw className="animate-spin" size={24} />
+                </div>
+              )}
+
+              <p
+                style={{
+                  fontSize: "13px",
+                  color: "#666",
+                  margin: "14px auto 0",
+                  maxWidth: "280px",
+                  lineHeight: "1.4",
+                }}
+              >
+                Point your phone camera to browse our menu and order directly to
+                Table {qrTable.number}
+              </p>
+            </div>
+
+            <div style={{ display: "flex", gap: "8px", marginBottom: "16px" }}>
+              <input
+                readOnly
+                value={
+                  typeof window !== "undefined"
+                    ? `${window.location.origin}/order?table=${qrTable.number}&code=${qrTable.qr_code}`
+                    : ""
+                }
+                style={{
+                  fontSize: "12px",
+                  padding: "8px 10px",
+                  borderRadius: "6px",
+                  border: "1px solid #ccc",
+                  flex: 1,
+                  background: "#f9f9f9",
+                  fontFamily: "monospace",
+                }}
+              />
+              <button
+                type="button"
+                className="ops-button secondary small"
+                onClick={() => {
+                  const url = `${window.location.origin}/order?table=${qrTable.number}&code=${qrTable.qr_code}`;
+                  navigator.clipboard.writeText(url);
+                  setQrCopied(true);
+                  setTimeout(() => setQrCopied(false), 2000);
+                }}
+              >
+                {qrCopied ? <Check size={14} /> : <Copy size={14} />}
+                {qrCopied ? "Copied" : "Copy link"}
+              </button>
+            </div>
+
+            <div
+              style={{
+                display: "flex",
+                gap: "10px",
+                justifyContent: "center",
+                flexWrap: "wrap",
+              }}
+            >
+              <button
+                type="button"
+                className="ops-button"
+                onClick={() => {
+                  const printWin = window.open("", "_blank");
+                  if (!printWin) return;
+                  printWin.document.write(`
+                    <!DOCTYPE html>
+                    <html>
+                      <head>
+                        <title>Table ${qrTable.number} QR Stand - Chennai Palace</title>
+                        <style>
+                          @page { size: auto; margin: 20mm; }
+                          body {
+                            font-family: system-ui, -apple-system, sans-serif;
+                            display: flex;
+                            align-items: center;
+                            justify-content: center;
+                            min-height: 90vh;
+                            margin: 0;
+                            background: white;
+                          }
+                          .card {
+                            border: 3px solid #8e1c3e;
+                            border-radius: 20px;
+                            padding: 40px;
+                            text-align: center;
+                            max-width: 360px;
+                            box-shadow: 0 10px 30px rgba(0,0,0,0.08);
+                          }
+                          .eyebrow {
+                            font-size: 13px;
+                            letter-spacing: 3px;
+                            color: #8e1c3e;
+                            font-weight: 700;
+                            text-transform: uppercase;
+                          }
+                          h1 {
+                            font-size: 42px;
+                            color: #8e1c3e;
+                            margin: 10px 0 20px;
+                            font-family: Georgia, serif;
+                          }
+                          img {
+                            width: 250px;
+                            height: 250px;
+                            margin: 0 auto;
+                            display: block;
+                          }
+                          p {
+                            font-size: 15px;
+                            color: #444;
+                            margin: 20px 0 0;
+                            line-height: 1.5;
+                          }
+                          .brand {
+                            margin-top: 25px;
+                            font-size: 12px;
+                            color: #888;
+                            border-top: 1px dashed #ddd;
+                            padding-top: 15px;
+                          }
+                        </style>
+                      </head>
+                      <body>
+                        <div class="card">
+                          <div class="eyebrow">Chennai Palace · Dine In</div>
+                          <h1>TABLE ${qrTable.number}</h1>
+                          <img src="${qrDataUrl}" alt="Table ${qrTable.number} QR Code" />
+                          <p>Scan with your phone camera to view menu & order directly to your table.</p>
+                          <div class="brand">Holden Hill, Adelaide · chennaipalace.com.au</div>
+                        </div>
+                        <script>
+                          window.onload = function() { window.print(); };
+                        </script>
+                      </body>
+                    </html>
+                  `);
+                  printWin.document.close();
+                }}
+              >
+                <Printer size={15} /> Print table stand
+              </button>
+
+              <button
+                type="button"
+                className="ops-button secondary"
+                disabled={busy}
+                onClick={async () => {
+                  if (
+                    !confirm(
+                      `Regenerate QR code for Table ${qrTable.number}? Any previously printed QR code for this table will stop working immediately.`,
+                    )
+                  ) {
+                    return;
+                  }
+                  setBusy(true);
+                  try {
+                    const res = await send<{
+                      ok: boolean;
+                      number: number;
+                      qr_code: string;
+                    }>("/api/admin", {
+                      kind: "regenerate_table_qr",
+                      number: qrTable.number,
+                    });
+                    setQrTable({ ...qrTable, qr_code: res.qr_code });
+                    setNotice(`Regenerated QR code for Table ${qrTable.number}!`);
+                    await loadAdmin();
+                  } catch (e) {
+                    setError((e as Error).message);
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                Regenerate code
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {printAllQrOpen && (
+        <div className="ops-modal-overlay">
+          <section
+            className="ops-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="print-all-dialog"
+            style={{ maxWidth: "780px" }}
+          >
+            <div className="ops-modal-heading">
+              <h2 id="print-all-dialog">Print All Active Table QR Stands</h2>
+              <button onClick={() => setPrintAllQrOpen(false)}>×</button>
+            </div>
+            <p className="ops-muted">
+              Ready to print table stands for all{" "}
+              {configuredTables.filter((t) => t.active).length} active tables.
+              Each table has its own unique, secured QR code.
+            </p>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
+                gap: "16px",
+                maxHeight: "440px",
+                overflowY: "auto",
+                padding: "16px",
+                background: "#fdfbf7",
+                borderRadius: "10px",
+                border: "1px solid #eadbd2",
+                margin: "14px 0",
+              }}
+            >
+              {configuredTables
+                .filter((t) => t.active)
+                .map((table) => (
+                  <div
+                    key={table.number}
+                    style={{
+                      background: "white",
+                      border: "2px solid #8e1c3e",
+                      borderRadius: "12px",
+                      padding: "16px",
+                      textAlign: "center",
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: "10px",
+                        letterSpacing: "1px",
+                        fontWeight: 700,
+                        color: "#8e1c3e",
+                      }}
+                    >
+                      CHENNAI PALACE
+                    </span>
+                    <h4
+                      style={{
+                        fontSize: "20px",
+                        margin: "4px 0 8px",
+                        color: "#8e1c3e",
+                      }}
+                    >
+                      TABLE {table.number}
+                    </h4>
+                    {allQrDataUrls[table.number] ? (
+                      /* eslint-disable-next-line @next/next/no-img-element */
+                      <img
+                        src={allQrDataUrls[table.number]}
+                        alt={`Table ${table.number}`}
+                        style={{
+                          width: "130px",
+                          height: "130px",
+                          margin: "0 auto",
+                          display: "block",
+                        }}
+                      />
+                    ) : (
+                      <div
+                        style={{
+                          height: "130px",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                        }}
+                      >
+                        <RefreshCw className="animate-spin" size={16} />
+                      </div>
+                    )}
+                    <p
+                      style={{
+                        fontSize: "10px",
+                        color: "#666",
+                        margin: "8px 0 0",
+                      }}
+                    >
+                      Scan to order directly
+                    </p>
+                  </div>
+                ))}
+            </div>
+
+            <div className="ops-actions">
+              <button
+                type="button"
+                className="ops-button"
+                onClick={() => {
+                  const printWin = window.open("", "_blank");
+                  if (!printWin) return;
+                  const cardsHtml = configuredTables
+                    .filter((t) => t.active)
+                    .map(
+                      (table) => `
+                        <div class="card">
+                          <div class="eyebrow">Chennai Palace · Dine In</div>
+                          <h1>TABLE ${table.number}</h1>
+                          <img src="${allQrDataUrls[table.number] || ""}" alt="Table ${table.number} QR" />
+                          <p>Scan with your phone camera to view menu & order directly to your table.</p>
+                          <div class="brand">Holden Hill, Adelaide</div>
+                        </div>
+                      `,
+                    )
+                    .join("");
+
+                  printWin.document.write(`
+                    <!DOCTYPE html>
+                    <html>
+                      <head>
+                        <title>All Table QR Stands - Chennai Palace</title>
+                        <style>
+                          @page { size: auto; margin: 15mm; }
+                          body {
+                            font-family: system-ui, -apple-system, sans-serif;
+                            margin: 0;
+                            background: white;
+                          }
+                          .grid {
+                            display: grid;
+                            grid-template-columns: repeat(2, 1fr);
+                            gap: 25px;
+                          }
+                          .card {
+                            border: 2px solid #8e1c3e;
+                            border-radius: 16px;
+                            padding: 24px 20px;
+                            text-align: center;
+                            page-break-inside: avoid;
+                          }
+                          .eyebrow {
+                            font-size: 11px;
+                            letter-spacing: 2px;
+                            color: #8e1c3e;
+                            font-weight: 700;
+                            text-transform: uppercase;
+                          }
+                          h1 {
+                            font-size: 32px;
+                            color: #8e1c3e;
+                            margin: 6px 0 14px;
+                            font-family: Georgia, serif;
+                          }
+                          img {
+                            width: 170px;
+                            height: 170px;
+                            margin: 0 auto;
+                            display: block;
+                          }
+                          p {
+                            font-size: 12px;
+                            color: #555;
+                            margin: 12px 0 0;
+                            line-height: 1.4;
+                          }
+                          .brand {
+                            margin-top: 14px;
+                            font-size: 10px;
+                            color: #888;
+                            border-top: 1px dashed #eee;
+                            padding-top: 8px;
+                          }
+                        </style>
+                      </head>
+                      <body>
+                        <div class="grid">
+                          ${cardsHtml}
+                        </div>
+                        <script>
+                          window.onload = function() { window.print(); };
+                        </script>
+                      </body>
+                    </html>
+                  `);
+                  printWin.document.close();
+                }}
+              >
+                <Printer size={15} /> Print All QR Stands
+              </button>
+              <button
+                type="button"
+                className="ops-button secondary"
+                onClick={() => setPrintAllQrOpen(false)}
+              >
+                Close
               </button>
             </div>
           </section>

@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useEffect, useState, useRef } from "react";
-import { ArrowUpRight, Search, X, Phone, Plus } from "lucide-react";
+import { ArrowUpRight, Search, X, Phone, Plus, QrCode } from "lucide-react";
 import initialMenu from "@/lib/menu.json";
 import { useCategoryScroll } from "@/lib/use-category-scroll";
 import { api } from "@/lib/client-api";
@@ -19,8 +19,37 @@ export default function MenuContent() {
   const [menu, setMenu] = useState<DisplayGroup[]>(initialMenu);
   const [menuError, setMenuError] = useState("");
   const [sessionTable, setSessionTable] = useState<number | null>(null);
+  const [tableLock, setTableLock] = useState<{
+    table: number;
+    code: string;
+  } | null>(null);
   useEffect(() => {
     let active = true;
+    try {
+      const lockRaw =
+        sessionStorage.getItem("palace_table_lock") ||
+        localStorage.getItem("palace_table_lock");
+      if (lockRaw) {
+        const lock = JSON.parse(lockRaw);
+        if (Number.isInteger(lock?.table) && typeof lock?.code === "string") {
+          api<{ valid: boolean }>(
+            `/api/tables/verify?table=${lock.table}&code=${encodeURIComponent(lock.code)}`,
+          )
+            .then((res) => {
+              if (active && res.valid) {
+                setTableLock(lock);
+              } else if (active) {
+                setTableLock(null);
+                sessionStorage.removeItem("palace_table_lock");
+                localStorage.removeItem("palace_table_lock");
+              }
+            })
+            .catch(() => {
+              if (active) setTableLock(lock);
+            });
+        }
+      }
+    } catch {}
     try {
       const saved = JSON.parse(
         sessionStorage.getItem("palace_customer_session") || "null",
@@ -149,10 +178,30 @@ export default function MenuContent() {
           </p>
         </div>
         <div className="menu-browse-actions">
-          <Link className="button" href="/order">
-            Order for your table <ArrowUpRight size={18} />
-          </Link>
-          {sessionTable !== null && (
+          {tableLock ? (
+            <Link className="button" href={`/order?table=${tableLock.table}`}>
+              Order for Table {tableLock.table} <ArrowUpRight size={18} />
+            </Link>
+          ) : (
+            <span
+              className="menu-qr-scan-badge"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "8px",
+                fontSize: "13px",
+                padding: "10px 18px",
+                borderRadius: "999px",
+                background: "#f3eae4",
+                color: "var(--ink)",
+                border: "1px solid #eadbd2",
+                fontWeight: 500,
+              }}
+            >
+              <QrCode size={16} /> Scan your table QR code to order
+            </span>
+          )}
+          {sessionTable !== null && tableLock && (
             <Link className="menu-history-link" href="/order?history=1">
               View order history <span>Table {sessionTable}</span>{" "}
               <ArrowUpRight size={16} />
@@ -233,7 +282,7 @@ export default function MenuContent() {
                   </div>
                   <div className="menu-item-action">
                     <span className="dish-price">{item.price}</span>
-                    {item.id && !item.soldOut && (
+                    {item.id && !item.soldOut && tableLock && (
                       <Link
                         href={`/order?item=${encodeURIComponent(item.id)}`}
                         aria-label={`Add ${item.name} to your table order`}
@@ -281,11 +330,13 @@ export default function MenuContent() {
               <div>
                 <span className="eyebrow">NOT SURE WHERE TO BEGIN?</span>
                 <h2 id="menu-inspiration-title">A little inspiration.</h2>
-                <p>A few ways to start your table order.</p>
+                <p>A few ways to start your meal.</p>
               </div>
-              <Link href="/order">
-                Build your order <ArrowUpRight size={17} />
-              </Link>
+              {tableLock && (
+                <Link href={`/order?table=${tableLock.table}`}>
+                  Build your order <ArrowUpRight size={17} />
+                </Link>
+              )}
             </div>
             <div className="menu-inspiration-grid">
               {inspiration.map((item, index) => (
@@ -300,9 +351,15 @@ export default function MenuContent() {
                           ? "A comforting curry for the table."
                           : "A cool finish alongside your meal.")}
                   </p>
-                  <Link href={`/order?item=${encodeURIComponent(item.id)}`}>
-                    Add to order <span>{item.price}</span> <Plus size={16} />
-                  </Link>
+                  {tableLock ? (
+                    <Link href={`/order?item=${encodeURIComponent(item.id)}`}>
+                      Add to order <span>{item.price}</span> <Plus size={16} />
+                    </Link>
+                  ) : (
+                    <div style={{ marginTop: "17px", minHeight: "40px", display: "flex", alignItems: "center" }}>
+                      <span className="dish-price" style={{ fontWeight: 650, color: "var(--ink)" }}>{item.price}</span>
+                    </div>
+                  )}
                 </article>
               ))}
             </div>
@@ -320,14 +377,22 @@ export default function MenuContent() {
         </div>
         <div className="menu-order-banner">
           <div>
-            <span className="eyebrow">FOUND YOUR FAVOURITES?</span>
-            <h2>Let’s make it a meal.</h2>
-            <p>Order right here for your table, or call us for takeaway.</p>
+            <span className="eyebrow">
+              {tableLock ? "FOUND YOUR FAVOURITES?" : "VISITING CHENNAI PALACE?"}
+            </span>
+            <h2>{tableLock ? "Let’s make it a meal." : "Dine-in or takeaway."}</h2>
+            <p>
+              {tableLock
+                ? "Order right here for your table, or call us for takeaway."
+                : "Scan the QR code on your dining table to unlock mobile ordering. Calling for takeaway? We’d love to serve you."}
+            </p>
           </div>
           <div className="menu-banner-actions">
-            <Link className="button button-light" href="/order">
-              Order for your table <ArrowUpRight size={18} />
-            </Link>
+            {tableLock && (
+              <Link className="button button-light" href={`/order?table=${tableLock.table}`}>
+                Order for Table {tableLock.table} <ArrowUpRight size={18} />
+              </Link>
+            )}
             <a href={restaurant.phoneHref}>
               <Phone size={16} /> Takeaway: {restaurant.phone}
             </a>

@@ -79,13 +79,21 @@ export async function POST(request: Request) {
         return { id: existing.rows[0].id };
       }
       const configured = await client.query(
-        "SELECT active FROM palace.restaurant_tables WHERE number=$1 FOR SHARE",
+        "SELECT active, qr_code FROM palace.restaurant_tables WHERE number=$1 FOR SHARE",
         [data.table_number],
       );
       assert(
         configured.rows[0]?.active,
         "This table is not available. Please choose another table or ask the cashier.",
         409,
+      );
+      assert(
+        typeof data.table_code === "string" &&
+          Boolean(configured.rows[0]?.qr_code) &&
+          data.table_code.trim().toLowerCase() ===
+            configured.rows[0].qr_code.trim().toLowerCase(),
+        "Scanning the table QR code is required to place an order. Please scan the QR code located on your table.",
+        403,
       );
       const { rows: sessions } = await client.query(
         "SELECT id,customer_token_hash FROM palace.table_sessions WHERE table_number=$1 AND closed_at IS NULL",

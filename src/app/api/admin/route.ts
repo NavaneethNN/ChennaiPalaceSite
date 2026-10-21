@@ -3,6 +3,11 @@ import { db, transaction } from "@/lib/server/db";
 import { passwordHash, staff } from "@/lib/server/auth";
 import { getPrinterSettings, savePrinterSettings } from "@/lib/server/printers";
 import {
+  getAllTables,
+  regenerateTableQrCode,
+  saveTable,
+} from "@/lib/server/tables";
+import {
   assert,
   body,
   failure,
@@ -19,15 +24,13 @@ export async function GET() {
       db().query(
         "SELECT id,name,pin,active FROM palace.cashiers ORDER BY created_at",
       ),
-      db().query(
-        "SELECT number,active FROM palace.restaurant_tables ORDER BY number",
-      ),
+      getAllTables(),
       getPrinterSettings(),
     ]);
     return json({
       menu: menu.rows,
       cashiers: cashiers.rows,
-      tables: tables.rows,
+      tables,
       printers,
     });
   } catch (error) {
@@ -112,11 +115,17 @@ export async function POST(request: Request) {
         "Choose a table number from 1 to 999.",
       );
       assert(typeof data.active === "boolean", "Invalid table status.");
-      await db().query(
-        `INSERT INTO palace.restaurant_tables(number,active) VALUES($1,$2)
-         ON CONFLICT(number) DO UPDATE SET active=EXCLUDED.active`,
-        [data.number, data.active],
+      const saved = await saveTable(Number(data.number), Boolean(data.active));
+      return json({ ok: true, table: saved });
+    } else if (data.kind === "regenerate_table_qr") {
+      assert(
+        Number.isInteger(data.number) &&
+          Number(data.number) >= 1 &&
+          Number(data.number) <= 999,
+        "Choose a table number from 1 to 999.",
       );
+      const newQrCode = await regenerateTableQrCode(Number(data.number));
+      return json({ ok: true, number: Number(data.number), qr_code: newQrCode });
     } else if (data.kind === "cashier") {
       assert(data.id === undefined || uuid(data.id), "Invalid cashier.");
       assert(

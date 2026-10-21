@@ -24,6 +24,11 @@ try {
   );
   menu[0].stock = 0;
   await page.route("**/api/menu", (route) => route.fulfill({ json: menu }));
+  await page.route("**/api/tables/verify*", (route) =>
+    route.fulfill({
+      json: { ok: true, valid: true, table: 1 },
+    }),
+  );
   await page.route("**/api/tables", (route) =>
     route.fulfill({
       json: [
@@ -36,7 +41,7 @@ try {
   const errors = [];
   for (const width of [390, 768, 1440]) {
     await page.setViewportSize({ width, height: 844 });
-    await page.goto(`${base}/order`);
+    await page.goto(`${base}/order?table=1&code=testcode123`);
     const dish = page.locator(".order-dish").first();
     await dish.waitFor();
     const box = await dish.boundingBox();
@@ -199,7 +204,7 @@ try {
     fullPage: true,
   });
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto(`${base}/order`);
+  await page.goto(`${base}/order?table=1&code=testcode123`);
   await page.locator(".order-dish").first().waitFor();
   const notes = page.getByPlaceholder("Any special requests?");
   await notes.fill("Please bring the drinks first");

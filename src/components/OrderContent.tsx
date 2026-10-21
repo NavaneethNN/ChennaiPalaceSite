@@ -7,6 +7,8 @@ import {
   ChevronUp,
   Check,
   Plus,
+  QrCode,
+  Phone,
   Search,
   ShoppingBag,
   Sparkles,
@@ -15,12 +17,14 @@ import {
 import { useCategoryScroll } from "@/lib/use-category-scroll";
 import { api, send } from "@/lib/client-api";
 import { money, type MenuItem } from "@/lib/types";
+import { restaurant } from "@/lib/content";
 type Receipt = { id: string; token: string; table: number };
 type TableChoice = {
   number: number;
   status: "available" | "yours" | "occupied";
 };
 type CustomerSession = { table: number; token: string };
+type TableLock = { table: number; code: string };
 type TrackedOrder = {
   status: string;
   closed_at: string | null;
@@ -46,6 +50,9 @@ export default function OrderContent() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [table, setTable] = useState("");
+  const [tableLock, setTableLock] = useState<TableLock | null>(null);
+  const [lockVerifying, setLockVerifying] = useState(false);
+  const [lockError, setLockError] = useState("");
   const [availableTables, setAvailableTables] = useState<TableChoice[]>([]);
   const [customerSession, setCustomerSession] =
     useState<CustomerSession | null>(null);
@@ -146,7 +153,79 @@ export default function OrderContent() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     setHistoryRequested(params.get("history") === "1");
-    if (params.get("table")) setTable(params.get("table")!);
+    const urlTable = params.get("table") || params.get("t");
+    const urlCode = params.get("code") || params.get("qr") || params.get("k");
+
+    if (urlTable && urlCode) {
+      setLockVerifying(true);
+      api<{ valid: boolean; table: number }>(
+        `/api/tables/verify?table=${urlTable}&code=${encodeURIComponent(urlCode)}`,
+      )
+        .then((res) => {
+          if (res.valid) {
+            const lock = { table: Number(urlTable), code: urlCode };
+            setTableLock(lock);
+            setTable(String(urlTable));
+            setLockError("");
+            try {
+              sessionStorage.setItem("palace_table_lock", JSON.stringify(lock));
+              localStorage.setItem("palace_table_lock", JSON.stringify(lock));
+            } catch {}
+            const cleanUrl = new URL(window.location.href);
+            cleanUrl.searchParams.delete("code");
+            cleanUrl.searchParams.delete("qr");
+            cleanUrl.searchParams.delete("k");
+            window.history.replaceState(
+              {},
+              "",
+              cleanUrl.pathname +
+                (cleanUrl.searchParams.toString()
+                  ? `?${cleanUrl.searchParams.toString()}`
+                  : ""),
+            );
+          } else {
+            setLockError(
+              "The scanned table QR code is invalid or expired. Please scan the QR code located on your dining table.",
+            );
+          }
+        })
+        .catch((err) => {
+          setLockError((err as Error).message);
+        })
+        .finally(() => setLockVerifying(false));
+    } else {
+      try {
+        const savedLockRaw =
+          sessionStorage.getItem("palace_table_lock") ||
+          localStorage.getItem("palace_table_lock");
+        if (savedLockRaw) {
+          const lock = JSON.parse(savedLockRaw);
+          if (Number.isInteger(lock?.table) && typeof lock?.code === "string") {
+            setLockVerifying(true);
+            api<{ valid: boolean }>(
+              `/api/tables/verify?table=${lock.table}&code=${encodeURIComponent(lock.code)}`,
+            )
+              .then((res) => {
+                if (res.valid) {
+                  setTableLock(lock);
+                  setTable(String(lock.table));
+                  setLockError("");
+                } else {
+                  sessionStorage.removeItem("palace_table_lock");
+                  localStorage.removeItem("palace_table_lock");
+                  setTableLock(null);
+                }
+              })
+              .catch(() => {
+                setTableLock(lock);
+                setTable(String(lock.table));
+              })
+              .finally(() => setLockVerifying(false));
+          }
+        }
+      } catch {}
+    }
+
     try {
       const saved = sessionStorage.getItem("palace_order");
       if (saved) {
@@ -378,6 +457,12 @@ export default function OrderContent() {
         .includes(query.trim().toLowerCase()),
   );
   async function placeOrder() {
+    if (!tableLock) {
+      setError(
+        "Scanning the QR code on your dining table is required to place an order.",
+      );
+      return;
+    }
     if (!canUseTable) {
       setError("Please choose an available table.");
       return;
@@ -392,6 +477,7 @@ export default function OrderContent() {
         };
       const data = await send<{ id: string }>("/api/orders", {
         table_number: Number(table),
+        table_code: tableLock.code,
         items: selected.map((i) => ({ id: i.id, quantity: cart[i.id] })),
         notes,
         request_key: request.current.key,
@@ -453,12 +539,290 @@ export default function OrderContent() {
         <div>
           <span className="eyebrow">CHENNAI PALACE · DINE IN</span>
           <h1>{receipt ? "Your table order" : "What are you craving?"}</h1>
-          <p>Pick your favourites. Choose your table when you’re ready.</p>
+          <p>
+            {tableLock
+              ? `Ordering directly for Table ${tableLock.table}. Add dishes when you're ready.`
+              : "South Indian classics, freshly prepared for your table."}
+          </p>
         </div>
         <Link href="/menu">
           Browse menu <ArrowRight size={16} />
         </Link>
       </header>
+
+      {lockVerifying && (
+        <div
+          style={{
+            textAlign: "center",
+            padding: "50px 20px",
+            background: "#fffdf9",
+            borderRadius: "10px",
+            border: "1px solid #eadbd2",
+            margin: "20px 0",
+          }}
+        >
+          <div
+            className="animate-spin"
+            style={{
+              display: "inline-block",
+              width: "28px",
+              height: "28px",
+              border: "3px solid #eadbd2",
+              borderTopColor: "var(--purple)",
+              borderRadius: "50%",
+              marginBottom: "12px",
+            }}
+          />
+          <h3 style={{ fontSize: "17px", margin: "0 0 4px" }}>
+            Verifying table QR code…
+          </h3>
+          <p style={{ color: "#777", fontSize: "13px", margin: 0 }}>
+            Securing your table order session.
+          </p>
+        </div>
+      )}
+
+      {!lockVerifying && !tableLock && !receipt && (
+        <section
+          style={{
+            margin: "20px auto 40px",
+            maxWidth: "600px",
+            background: "#fffdf9",
+            border: "1px solid #eadbd2",
+            borderRadius: "14px",
+            padding: "36px 28px",
+            textAlign: "center",
+          }}
+          aria-label="Table QR code required"
+        >
+          <div
+            style={{
+              width: "68px",
+              height: "68px",
+              background: "rgba(142, 28, 62, 0.08)",
+              color: "var(--purple)",
+              borderRadius: "50%",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              margin: "0 auto 18px",
+            }}
+          >
+            <QrCode size={36} />
+          </div>
+          <span className="eyebrow">DINE-IN ORDER SECURITY</span>
+          <h2 style={{ fontSize: "28px", margin: "8px 0 12px" }}>
+            Scan your table QR code to order
+          </h2>
+          <p
+            style={{
+              fontSize: "14px",
+              lineHeight: "1.6",
+              color: "#666",
+              marginBottom: "24px",
+            }}
+          >
+            For guest security and accurate kitchen dispatch, online orders can
+            only be placed by scanning the QR code stand located on your dining
+            table.
+          </p>
+
+          {lockError && (
+            <div
+              className="ops-alert"
+              style={{ marginBottom: "20px", textAlign: "left" }}
+              role="alert"
+            >
+              {lockError}
+            </div>
+          )}
+
+          <div
+            style={{
+              display: "grid",
+              gap: "14px",
+              textAlign: "left",
+              background: "#f8f3ee",
+              padding: "20px",
+              borderRadius: "10px",
+              marginBottom: "26px",
+            }}
+          >
+            <div
+              style={{ display: "flex", gap: "12px", alignItems: "flex-start" }}
+            >
+              <span
+                style={{
+                  background: "var(--purple)",
+                  color: "white",
+                  width: "22px",
+                  height: "22px",
+                  borderRadius: "50%",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: "12px",
+                  fontWeight: "bold",
+                  flexShrink: 0,
+                }}
+              >
+                1
+              </span>
+              <div>
+                <strong style={{ fontSize: "14px" }}>
+                  Find the QR stand on your table
+                </strong>
+                <p style={{ fontSize: "12px", color: "#666", margin: "2px 0 0" }}>
+                  Every dining table at Chennai Palace features a dedicated QR
+                  code stand.
+                </p>
+              </div>
+            </div>
+            <div
+              style={{ display: "flex", gap: "12px", alignItems: "flex-start" }}
+            >
+              <span
+                style={{
+                  background: "var(--purple)",
+                  color: "white",
+                  width: "22px",
+                  height: "22px",
+                  borderRadius: "50%",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: "12px",
+                  fontWeight: "bold",
+                  flexShrink: 0,
+                }}
+              >
+                2
+              </span>
+              <div>
+                <strong style={{ fontSize: "14px" }}>
+                  Scan with your phone camera
+                </strong>
+                <p style={{ fontSize: "12px", color: "#666", margin: "2px 0 0" }}>
+                  Open your camera or QR code scanner and point it at the code.
+                </p>
+              </div>
+            </div>
+            <div
+              style={{ display: "flex", gap: "12px", alignItems: "flex-start" }}
+            >
+              <span
+                style={{
+                  background: "var(--purple)",
+                  color: "white",
+                  width: "22px",
+                  height: "22px",
+                  borderRadius: "50%",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: "12px",
+                  fontWeight: "bold",
+                  flexShrink: 0,
+                }}
+              >
+                3
+              </span>
+              <div>
+                <strong style={{ fontSize: "14px" }}>
+                  Order straight to your table
+                </strong>
+                <p style={{ fontSize: "12px", color: "#666", margin: "2px 0 0" }}>
+                  Tap the notification to unlock your session and order dishes.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div
+            style={{
+              display: "flex",
+              gap: "12px",
+              justifyContent: "center",
+              flexWrap: "wrap",
+            }}
+          >
+            <Link className="button" href="/menu">
+              Browse menu (View only) <ArrowRight size={16} />
+            </Link>
+            <a
+              href={restaurant.phoneHref}
+              className="button secondary"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "8px",
+              }}
+            >
+              <Phone size={15} /> Takeaway: {restaurant.phone}
+            </a>
+          </div>
+        </section>
+      )}
+
+      {tableLock && !receipt && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            background: "#f3eae4",
+            border: "1px solid #eadbd2",
+            borderRadius: "8px",
+            padding: "10px 16px",
+            marginBottom: "20px",
+            fontSize: "13px",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <span
+              className="ops-badge accepted"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "4px",
+              }}
+            >
+              <Check size={12} /> Table {tableLock.table} Active
+            </span>
+            <span>
+              Your session is locked to <strong>Table {tableLock.table}</strong>
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              if (
+                confirm(
+                  `Clear Table ${tableLock.table} session and scan another table?`,
+                )
+              ) {
+                setTableLock(null);
+                setTable("");
+                try {
+                  sessionStorage.removeItem("palace_table_lock");
+                  localStorage.removeItem("palace_table_lock");
+                } catch {}
+              }
+            }}
+            style={{
+              background: "none",
+              border: "none",
+              color: "var(--purple)",
+              fontSize: "12px",
+              textDecoration: "underline",
+              cursor: "pointer",
+            }}
+          >
+            Switch table
+          </button>
+        </div>
+      )}
+
       <div
         className="order-feedback"
         role="status"
@@ -585,7 +949,7 @@ export default function OrderContent() {
             Payment and billing are handled at the cashier.
           </p>
         </section>
-      ) : (
+      ) : tableLock ? (
         <div className="order-layout">
           <section>
             <div className="order-filters">
@@ -791,16 +1155,57 @@ export default function OrderContent() {
                   {error}
                 </div>
               )}
-              <TableSelect
-                key={String(cartOpen)}
-                value={table}
-                choices={availableTables}
-                loading={tablesLoading}
-                onChange={(value) => {
-                  setTable(value);
-                  request.current = null;
-                }}
-              />
+              {tableLock ? (
+                <div
+                  className="ops-field"
+                  style={{
+                    background: "#f8f3ee",
+                    padding: "12px 14px",
+                    borderRadius: "8px",
+                    border: "1px solid #eadbd2",
+                    marginBottom: "14px",
+                  }}
+                >
+                  <span
+                    style={{
+                      fontSize: "12px",
+                      color: "#666",
+                      display: "block",
+                    }}
+                  >
+                    Dining table
+                  </span>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      marginTop: "4px",
+                    }}
+                  >
+                    <strong style={{ fontSize: "16px" }}>
+                      Table {tableLock.table}
+                    </strong>
+                    <span
+                      className="ops-badge accepted"
+                      style={{ fontSize: "11px" }}
+                    >
+                      ✓ QR Verified
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <TableSelect
+                  key={String(cartOpen)}
+                  value={table}
+                  choices={availableTables}
+                  loading={tablesLoading}
+                  onChange={(value) => {
+                    setTable(value);
+                    request.current = null;
+                  }}
+                />
+              )}
               {!tablesLoading &&
                 !availableTables.some(
                   (choice) => choice.status !== "occupied",
@@ -888,14 +1293,14 @@ export default function OrderContent() {
             </div>
           </aside>
         </div>
-      )}
-      {!receipt && (
+      ) : null}
+      {!receipt && tableLock && (
         <div className="order-mobile-bar">
           <span>
             <small>
               {count
                 ? `${count} ${count === 1 ? "item" : "items"} in your order`
-                : "Your table order"}
+                : `Table ${tableLock.table} order`}
             </small>
             <strong key={count} className="order-total-pop">
               {money(total)}

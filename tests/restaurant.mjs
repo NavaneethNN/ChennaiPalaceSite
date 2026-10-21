@@ -160,8 +160,13 @@ try {
   );
   const token = randomUUID(),
     key = randomUUID();
+  const tableRecord = (
+    await call("/api/admin", { cookie: adminCookie })
+  ).value.tables.find((t) => t.number === table);
+  const tableCode = tableRecord?.qr_code || "";
   const data = {
     table_number: table,
+    table_code: tableCode,
     request_key: key,
     tracking_token: token,
     notes: "No chilli please",
@@ -170,6 +175,11 @@ try {
       { id: counter, quantity: 1 },
     ],
   };
+  await call("/api/orders", {
+    method: "POST",
+    data: { ...data, table_code: "invalid-qr-code" },
+    expected: 403,
+  });
   await call("/api/orders", {
     method: "POST",
     data: { ...data, table_number: unconfiguredTable },
@@ -505,9 +515,15 @@ try {
   await cashierPage
     .getByText("Live restaurant workspace", { exact: true })
     .waitFor();
+  const browserTableRecord = (
+    await call("/api/admin", { cookie: adminCookie })
+  ).value.tables.find((t) => t.number === browserTable);
+  const browserTableCode = browserTableRecord?.qr_code || "";
   page = await browser.newPage({ viewport: { width: 390, height: 844 } });
   page.on("pageerror", (e) => errors.push(e.message));
-  await page.goto(base + "/order?table=" + browserTable);
+  await page.goto(
+    base + "/order?table=" + browserTable + "&code=" + browserTableCode,
+  );
   await page.getByLabel("Search dishes", { exact: true }).fill(prefix);
   await page
     .getByRole("button", { name: `Add one ${prefix} counter`, exact: true })

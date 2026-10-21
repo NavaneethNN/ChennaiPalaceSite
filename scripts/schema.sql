@@ -23,8 +23,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS one_open_session_per_table ON palace.table_ses
 CREATE TABLE IF NOT EXISTS palace.restaurant_tables (
  number integer PRIMARY KEY CHECK(number BETWEEN 1 AND 999),
  active boolean NOT NULL DEFAULT true,
+ qr_code text NOT NULL DEFAULT replace(gen_random_uuid()::text, '-', ''),
  created_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE palace.restaurant_tables ADD COLUMN IF NOT EXISTS qr_code text;
+UPDATE palace.restaurant_tables SET qr_code = replace(gen_random_uuid()::text, '-', '') WHERE qr_code IS NULL OR qr_code = '';
 INSERT INTO palace.restaurant_tables(number)
  SELECT DISTINCT table_number FROM palace.table_sessions ON CONFLICT DO NOTHING;
 CREATE TABLE IF NOT EXISTS palace.orders (
