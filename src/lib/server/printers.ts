@@ -32,13 +32,15 @@ async function ensureTable() {
         kitchen_paper_size text NOT NULL DEFAULT '80mm',
         cashier_printer text NOT NULL DEFAULT '',
         cashier_paper_size text NOT NULL DEFAULT '80mm',
+        bridge_host text NOT NULL DEFAULT '127.0.0.1',
         updated_at timestamptz NOT NULL DEFAULT now(),
         updated_by text
       );
       ALTER TABLE palace.printer_settings ADD COLUMN IF NOT EXISTS kitchen_paper_size text NOT NULL DEFAULT '80mm';
       ALTER TABLE palace.printer_settings ADD COLUMN IF NOT EXISTS cashier_paper_size text NOT NULL DEFAULT '80mm';
-      INSERT INTO palace.printer_settings (id, kitchen_printer, kitchen_paper_size, cashier_printer, cashier_paper_size)
-      VALUES (1, '', '80mm', '', '80mm')
+      ALTER TABLE palace.printer_settings ADD COLUMN IF NOT EXISTS bridge_host text NOT NULL DEFAULT '127.0.0.1';
+      INSERT INTO palace.printer_settings (id, kitchen_printer, kitchen_paper_size, cashier_printer, cashier_paper_size, bridge_host)
+      VALUES (1, '', '80mm', '', '80mm', '127.0.0.1')
       ON CONFLICT (id) DO NOTHING;
     `);
     tableEnsured = true;
@@ -55,6 +57,7 @@ export async function getPrinterSettings(): Promise<PrinterSettings> {
               COALESCE(kitchen_paper_size, '80mm') AS kitchen_paper_size,
               cashier_printer,
               COALESCE(cashier_paper_size, '80mm') AS cashier_paper_size,
+              COALESCE(bridge_host, '127.0.0.1') AS bridge_host,
               updated_at,
               updated_by
        FROM palace.printer_settings WHERE id = 1`,
@@ -65,6 +68,7 @@ export async function getPrinterSettings(): Promise<PrinterSettings> {
         kitchen_paper_size: rows[0].kitchen_paper_size === "58mm" ? "58mm" : "80mm",
         cashier_printer: rows[0].cashier_printer || "",
         cashier_paper_size: rows[0].cashier_paper_size === "58mm" ? "58mm" : "80mm",
+        bridge_host: rows[0].bridge_host || "127.0.0.1",
         updated_at: rows[0].updated_at,
         updated_by: rows[0].updated_by,
       };
@@ -77,6 +81,7 @@ export async function getPrinterSettings(): Promise<PrinterSettings> {
     kitchen_paper_size: "80mm",
     cashier_printer: "",
     cashier_paper_size: "80mm",
+    bridge_host: "127.0.0.1",
   };
 }
 
@@ -86,31 +91,35 @@ export async function savePrinterSettings(
   cashierPrinter: string,
   cashierPaperSize: PaperSize,
   updatedBy: string,
+  bridgeHost: string = "127.0.0.1",
 ): Promise<PrinterSettings> {
   await ensureTable();
   const validKitchenPaper: PaperSize =
     kitchenPaperSize === "58mm" ? "58mm" : "80mm";
   const validCashierPaper: PaperSize =
     cashierPaperSize === "58mm" ? "58mm" : "80mm";
+  const cleanBridgeHost = bridgeHost.trim() || "127.0.0.1";
 
   const { rows } = await db().query<PrinterSettings>(
     `INSERT INTO palace.printer_settings(
-       id, kitchen_printer, kitchen_paper_size, cashier_printer, cashier_paper_size, updated_at, updated_by
+       id, kitchen_printer, kitchen_paper_size, cashier_printer, cashier_paper_size, bridge_host, updated_at, updated_by
      )
-     VALUES(1, $1, $2, $3, $4, now(), $5)
+     VALUES(1, $1, $2, $3, $4, $5, now(), $6)
      ON CONFLICT(id) DO UPDATE SET
        kitchen_printer = EXCLUDED.kitchen_printer,
        kitchen_paper_size = EXCLUDED.kitchen_paper_size,
        cashier_printer = EXCLUDED.cashier_printer,
        cashier_paper_size = EXCLUDED.cashier_paper_size,
+       bridge_host = EXCLUDED.bridge_host,
        updated_at = now(),
        updated_by = EXCLUDED.updated_by
-     RETURNING kitchen_printer, kitchen_paper_size, cashier_printer, cashier_paper_size, updated_at, updated_by`,
+     RETURNING kitchen_printer, kitchen_paper_size, cashier_printer, cashier_paper_size, bridge_host, updated_at, updated_by`,
     [
       kitchenPrinter.trim(),
       validKitchenPaper,
       cashierPrinter.trim(),
       validCashierPaper,
+      cleanBridgeHost,
       updatedBy,
     ],
   );
@@ -120,16 +129,52 @@ export async function savePrinterSettings(
       kitchen_paper_size: validKitchenPaper,
       cashier_printer: cashierPrinter,
       cashier_paper_size: validCashierPaper,
+      bridge_host: cleanBridgeHost,
     }
   );
 }
 
-export async function getSystemPrinters(): Promise<{
+export async function getSystemPrinters(bridgeHost?: string): Promise<{
   printers: DetectedPrinter[];
   platform: string;
   source: string;
   error?: string;
 }> {
+  // If a Windows Bridge host IP/name is provided (e.g. 192.168.1.50 or 127.0.0.1),
+  // attempt to query the Windows Printer Bridge over HTTP first.
+  const host = bridgeHost?.trim();
+  if (host) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 2000);
+      const res = await fetch(`http://${host}:18080/printers`, {
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+      if (res.ok) {
+        const raw = await res.json();
+        const list = Array.isArray(raw) ? raw : [raw];
+        const printers: DetectedPrinter[] = list
+          .filter((item) => item && (item.Name || item.name))
+          .map((item) => ({
+            name: String(item.Name || item.name).trim(),
+            is_default: Boolean(item.Default ?? item.is_default),
+            port: item.PortName || item.port || undefined,
+          }))
+          .filter((p) => p.name.length > 0);
+        if (printers.length > 0) {
+          return {
+            printers,
+            platform: "win32-bridge",
+            source: `Windows bridge at ${host}:18080`,
+          };
+        }
+      }
+    } catch {
+      // Bridge not reachable at this host; proceed to host OS check
+    }
+  }
+
   const platform = process.platform;
 
   if (platform === "win32") {

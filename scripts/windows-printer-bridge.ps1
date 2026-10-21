@@ -11,17 +11,71 @@
 
 $port = 18080
 $listener = New-Object System.Net.HttpListener
-$listener.Prefixes.Add("http://127.0.0.1:$port/")
-$listener.Prefixes.Add("http://localhost:$port/")
+
+# Discover local IPv4 addresses on this Windows PC
+$localIPs = @()
+try {
+    $allAddrs = [System.Net.Dns]::GetHostAddresses([System.Net.Dns]::GetHostName())
+    foreach ($addr in $allAddrs) {
+        if ($addr.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork -and $addr.IPAddressToString -notlike "127.*" -and $addr.IPAddressToString -notlike "169.254.*") {
+            $localIPs += $addr.IPAddressToString
+        }
+    }
+} catch {}
+
+$isLanMode = $false
+try {
+    # Attempt to listen on all network interfaces (LAN mode)
+    $listener.Prefixes.Add("http://*:$port/")
+    $listener.Start()
+    $isLanMode = $true
+} catch {
+    try {
+        $listener = New-Object System.Net.HttpListener
+        $listener.Prefixes.Add("http://+:$port/")
+        $listener.Start()
+        $isLanMode = $true
+    } catch {
+        # Fallback to localhost only
+        $listener = New-Object System.Net.HttpListener
+        $listener.Prefixes.Add("http://127.0.0.1:$port/")
+        $listener.Prefixes.Add("http://localhost:$port/")
+        $listener.Start()
+        $isLanMode = $false
+    }
+}
 
 try {
-    $listener.Start()
     Write-Host "==========================================================" -ForegroundColor Green
     Write-Host "  Chennai Palace - Windows Printer Bridge is ACTIVE" -ForegroundColor Green
-    Write-Host "  Listening on: http://127.0.0.1:$port/" -ForegroundColor Cyan
+    Write-Host "==========================================================" -ForegroundColor Green
+    if ($isLanMode) {
+        Write-Host "  STATUS: Connected to ALL network interfaces (Port $port)" -ForegroundColor Green
+        Write-Host ""
+        Write-Host "  Local IP address of this Windows PC:" -ForegroundColor Cyan
+        foreach ($ip in $localIPs) {
+            Write-Host "    -> $ip" -ForegroundColor Yellow
+        }
+        Write-Host ""
+        Write-Host "  HOW TO CONNECT FROM YOUR MAC OR IPAD OVER WI-FI:" -ForegroundColor White
+        Write-Host "  1. On your Mac/iPad, open Chennai Palace Admin > Printers." -ForegroundColor Gray
+        if ($localIPs.Count -gt 0) {
+            Write-Host "  2. Under 'Windows PC IP', enter: $($localIPs[0])" -ForegroundColor Yellow
+        } else {
+            Write-Host "  2. Under 'Windows PC IP', enter your Windows PC local IP." -ForegroundColor Yellow
+        }
+        Write-Host "  3. Click 'Scan Windows printers'. Your printers will appear instantly!" -ForegroundColor Gray
+    } else {
+        Write-Host "  STATUS: Listening on Localhost only (http://127.0.0.1:$port/)" -ForegroundColor Yellow
+        Write-Host "  Printers can be scanned when Chennai Palace is opened in Chrome/Edge on this PC." -ForegroundColor Gray
+        Write-Host ""
+        Write-Host "  Tip: To allow scanning/printing from a Mac or iPad over Wi-Fi:" -ForegroundColor Gray
+        Write-Host "  Close this window, right-click windows-printer-bridge.bat and select 'Run as administrator'." -ForegroundColor Gray
+    }
+    Write-Host ""
     Write-Host "  - GET  /printers : Detects connected Windows printers" -ForegroundColor Gray
     Write-Host "  - POST /print    : Direct instant printing for KOT orders" -ForegroundColor Gray
-    Write-Host "  Leave this window open during restaurant service." -ForegroundColor Yellow
+    Write-Host "  Leave this window open during restaurant service." -ForegroundColor Cyan
     Write-Host "  Press Ctrl+C to close." -ForegroundColor Gray
     Write-Host "==========================================================" -ForegroundColor Green
 
@@ -30,10 +84,11 @@ try {
         $request = $context.Request
         $response = $context.Response
 
-        # Allow Web Browser to communicate with localhost (CORS)
+        # Allow Web Browser to communicate with localhost and across LAN (CORS)
         $response.AddHeader("Access-Control-Allow-Origin", "*")
         $response.AddHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        $response.AddHeader("Access-Control-Allow-Headers", "Content-Type")
+        $response.AddHeader("Access-Control-Allow-Headers", "*")
+        $response.AddHeader("Access-Control-Max-Age", "86400")
 
         if ($request.HttpMethod -eq "OPTIONS") {
             $response.StatusCode = 204

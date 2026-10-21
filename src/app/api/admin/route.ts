@@ -183,12 +183,17 @@ export async function POST(request: Request) {
         data.kitchen_paper_size === "58mm" ? "58mm" : "80mm";
       const cashierPaper =
         data.cashier_paper_size === "58mm" ? "58mm" : "80mm";
+      const bridgeHost =
+        typeof data.bridge_host === "string" && data.bridge_host.trim()
+          ? data.bridge_host.trim()
+          : "127.0.0.1";
       await savePrinterSettings(
         data.kitchen_printer,
         kitchenPaper,
         data.cashier_printer,
         cashierPaper,
         user.name,
+        bridgeHost,
       );
     } else assert(false, "Invalid operation.");
     return json({ ok: true });

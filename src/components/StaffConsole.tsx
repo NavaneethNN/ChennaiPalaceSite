@@ -111,12 +111,16 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
     kitchen_paper_size: "80mm",
     cashier_printer: "",
     cashier_paper_size: "80mm",
+    bridge_host: "127.0.0.1",
   });
   const [detectedPrinters, setDetectedPrinters] = useState<DetectedPrinter[]>(
     [],
   );
   const [scanningPrinters, setScanningPrinters] = useState(false);
   const [printerPlatform, setPrinterPlatform] = useState("");
+  const [bridgeHostDraft, setBridgeHostDraft] = useState("127.0.0.1");
+  const [bridgeTesting, setBridgeTesting] = useState(false);
+  const [bridgeTestMessage, setBridgeTestMessage] = useState("");
   const [kitchenPrinterDraft, setKitchenPrinterDraft] = useState("");
   const [kitchenPaperDraft, setKitchenPaperDraft] = useState<PaperSize>("80mm");
   const [cashierPrinterDraft, setCashierPrinterDraft] = useState("");
@@ -132,9 +136,9 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
   const [updated, setUpdated] = useState("");
   useEffect(() => {
     const unsub = subscribePrintStatus(setPrintStatuses);
-    void checkWindowsBridge().then((ok) => setBridgeConnected(ok));
+    void checkWindowsBridge(printerSettings.bridge_host).then((ok) => setBridgeConnected(ok));
     return unsub;
-  }, []);
+  }, [printerSettings.bridge_host]);
   useEffect(() => {
     api<Staff>("/api/auth")
       .then((u) => {
@@ -183,6 +187,7 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
       setKitchenPaperDraft(data.printers.kitchen_paper_size || "80mm");
       setCashierPrinterDraft(data.printers.cashier_printer || "");
       setCashierPaperDraft(data.printers.cashier_paper_size || "80mm");
+      setBridgeHostDraft(data.printers.bridge_host || "127.0.0.1");
     }
   }, []);
   function inferPaper(name: string): PaperSize {
@@ -209,102 +214,152 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
       if (val) setCashierPaperDraft(inferPaper(val));
     }
   }
-  const detectPrinters = useCallback(async () => {
-    setScanningPrinters(true);
-    setError("");
-    let found: DetectedPrinter[] = [];
-    let detectedSource = "";
-    let bridgeOk = false;
+  const detectPrinters = useCallback(
+    async (customHost?: string) => {
+      setScanningPrinters(true);
+      setError("");
+      let found: DetectedPrinter[] = [];
+      let detectedSource = "";
+      let bridgeOk = false;
+      const targetHost =
+        (customHost ?? bridgeHostDraft ?? printerSettings.bridge_host ?? "127.0.0.1").trim() ||
+        "127.0.0.1";
 
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 2000);
+        const res = await fetch(`http://${targetHost}:18080/printers`, {
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+        if (res.ok) {
+          const localPrinters = await res.json();
+          if (Array.isArray(localPrinters) && localPrinters.length > 0) {
+            found = localPrinters
+              .map(
+                (p: {
+                  name?: string;
+                  Name?: string;
+                  default?: boolean;
+                  is_default?: boolean;
+                  port?: string;
+                  PortName?: string;
+                }) => ({
+                  name: p.name || p.Name || "",
+                  is_default: Boolean(p.is_default || p.default),
+                  port: p.port || p.PortName,
+                }),
+              )
+              .filter((p: DetectedPrinter) => p.name);
+            bridgeOk = true;
+            detectedSource = `Windows bridge (${targetHost})`;
+          }
+        }
+      } catch {
+        // Local bridge not running or timed out; continue to server API
+      }
+
+      setBridgeConnected(bridgeOk);
+
+      try {
+        const data = await api<{
+          settings: PrinterSettings;
+          system_printers: DetectedPrinter[];
+          platform: string;
+          source: string;
+        }>(`/api/admin/printers?bridge_host=${encodeURIComponent(targetHost)}`);
+
+        if (data.settings) {
+          setPrinterSettings(data.settings);
+          setKitchenPrinterDraft(
+            (prev) => prev || data.settings.kitchen_printer || "",
+          );
+          setKitchenPaperDraft(
+            (prev) => prev || data.settings.kitchen_paper_size || "80mm",
+          );
+          setCashierPrinterDraft(
+            (prev) => prev || data.settings.cashier_printer || "",
+          );
+          setCashierPaperDraft(
+            (prev) => prev || data.settings.cashier_paper_size || "80mm",
+          );
+          setBridgeHostDraft(
+            (prev) => prev || data.settings.bridge_host || "127.0.0.1",
+          );
+        }
+
+        setPrinterPlatform(data.platform);
+
+        const map = new Map<string, DetectedPrinter>();
+        for (const p of found) {
+          if (p.name) map.set(p.name.toLowerCase(), p);
+        }
+        for (const p of data.system_printers || []) {
+          if (p.name && !map.has(p.name.toLowerCase())) {
+            map.set(p.name.toLowerCase(), p);
+          }
+        }
+        const allDetected = Array.from(map.values());
+        setDetectedPrinters(allDetected);
+
+        if (allDetected.length > 0) {
+          setNotice(
+            `Discovered ${allDetected.length} printer${allDetected.length === 1 ? "" : "s"} (${detectedSource || data.source || "system"}). Assign them to Kitchen or Cashier below.`,
+          );
+        } else {
+          if (data.platform === "darwin" && targetHost === "127.0.0.1") {
+            setNotice(
+              "Scan completed on this Mac. Since your printer is connected to Windows, enter your Windows PC's local IP address above and run windows-printer-bridge.bat on Windows.",
+            );
+          } else {
+            setNotice(
+              `Scan finished for host ${targetHost}. If printers are connected, ensure windows-printer-bridge.bat is running on Windows.`,
+            );
+          }
+        }
+      } catch (e) {
+        setError((e as Error).message);
+      } finally {
+        setScanningPrinters(false);
+      }
+    },
+    [bridgeHostDraft, printerSettings.bridge_host],
+  );
+
+  async function testBridgeConnection() {
+    setBridgeTesting(true);
+    setBridgeTestMessage("");
+    const targetHost =
+      (bridgeHostDraft || printerSettings.bridge_host || "127.0.0.1").trim() ||
+      "127.0.0.1";
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 1500);
-      const res = await fetch("http://127.0.0.1:18080/printers", {
+      const timeoutId = setTimeout(() => controller.abort(), 2500);
+      const res = await fetch(`http://${targetHost}:18080/`, {
         signal: controller.signal,
       });
       clearTimeout(timeoutId);
       if (res.ok) {
-        const localPrinters = await res.json();
-        if (Array.isArray(localPrinters) && localPrinters.length > 0) {
-          found = localPrinters
-            .map(
-              (p: {
-                name?: string;
-                Name?: string;
-                default?: boolean;
-                is_default?: boolean;
-                port?: string;
-                PortName?: string;
-              }) => ({
-                name: p.name || p.Name || "",
-                is_default: Boolean(p.is_default || p.default),
-                port: p.port || p.PortName,
-              }),
-            )
-            .filter((p: DetectedPrinter) => p.name);
-          bridgeOk = true;
-          detectedSource = "Windows local bridge";
-        }
+        setBridgeConnected(true);
+        setBridgeTestMessage(
+          `✓ Connected! Windows Bridge is responding at http://${targetHost}:18080`,
+        );
+        void detectPrinters(targetHost);
+      } else {
+        setBridgeConnected(false);
+        setBridgeTestMessage(
+          `⚠️ Bridge responded with HTTP status ${res.status}`,
+        );
       }
     } catch {
-      // Local bridge not running or timed out; continue to server API
-    }
-
-    setBridgeConnected(bridgeOk);
-
-    try {
-      const data = await api<{
-        settings: PrinterSettings;
-        system_printers: DetectedPrinter[];
-        platform: string;
-        source: string;
-      }>("/api/admin/printers");
-
-      if (data.settings) {
-        setPrinterSettings(data.settings);
-        setKitchenPrinterDraft(
-          (prev) => prev || data.settings.kitchen_printer || "",
-        );
-        setKitchenPaperDraft(
-          (prev) => prev || data.settings.kitchen_paper_size || "80mm",
-        );
-        setCashierPrinterDraft(
-          (prev) => prev || data.settings.cashier_printer || "",
-        );
-        setCashierPaperDraft(
-          (prev) => prev || data.settings.cashier_paper_size || "80mm",
-        );
-      }
-
-      setPrinterPlatform(data.platform);
-
-      const map = new Map<string, DetectedPrinter>();
-      for (const p of found) {
-        if (p.name) map.set(p.name.toLowerCase(), p);
-      }
-      for (const p of data.system_printers || []) {
-        if (p.name && !map.has(p.name.toLowerCase())) {
-          map.set(p.name.toLowerCase(), p);
-        }
-      }
-      const allDetected = Array.from(map.values());
-      setDetectedPrinters(allDetected);
-
-      if (allDetected.length > 0) {
-        setNotice(
-          `Discovered ${allDetected.length} printer${allDetected.length === 1 ? "" : "s"} (${detectedSource || data.source || "system"}). Assign them to Kitchen or Cashier below.`,
-        );
-      } else {
-        setNotice(
-          "Scan finished. If two printers are connected, ensure Windows drivers are installed or run the Windows bridge helper.",
-        );
-      }
-    } catch (e) {
-      setError((e as Error).message);
+      setBridgeConnected(false);
+      setBridgeTestMessage(
+        `❌ Not reachable at http://${targetHost}:18080. Check that windows-printer-bridge.bat is running on Windows and both devices are on the same Wi-Fi.`,
+      );
     } finally {
-      setScanningPrinters(false);
+      setBridgeTesting(false);
     }
-  }, []);
+  }
   useEffect(() => {
     if (!user) return;
     let active = true;
@@ -547,6 +602,7 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
     setBusy(true);
     setError("");
     setNotice("");
+    const cleanBridgeHost = bridgeHostDraft.trim() || "127.0.0.1";
     try {
       await send("/api/admin", {
         kind: "printer",
@@ -554,15 +610,17 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
         kitchen_paper_size: kitchenPaperDraft,
         cashier_printer: cashierPrinterDraft,
         cashier_paper_size: cashierPaperDraft,
+        bridge_host: cleanBridgeHost,
       });
       setPrinterSettings({
         kitchen_printer: kitchenPrinterDraft,
         kitchen_paper_size: kitchenPaperDraft,
         cashier_printer: cashierPrinterDraft,
         cashier_paper_size: cashierPaperDraft,
+        bridge_host: cleanBridgeHost,
       });
       setNotice(
-        `Printer assignments saved! Kitchen: ${kitchenPrinterDraft || "(default)"} [${kitchenPaperDraft}], Cashier: ${cashierPrinterDraft || "(default)"} [${cashierPaperDraft}]. KOT formatting adjusts automatically.`,
+        `Printer assignments saved! Kitchen: ${kitchenPrinterDraft || "(default)"} [${kitchenPaperDraft}], Cashier: ${cashierPrinterDraft || "(default)"} [${cashierPaperDraft}], Windows Host: ${cleanBridgeHost}.`,
       );
       await loadAdmin();
     } catch (e) {
@@ -1603,6 +1661,33 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
                     automatically adjust ticket typography and margins.
                   </p>
 
+                  {printerPlatform === "darwin" && (
+                    <div
+                      className="ops-alert"
+                      style={{
+                        marginBottom: "16px",
+                        background: "rgba(245, 158, 11, 0.08)",
+                        borderColor: "rgba(245, 158, 11, 0.4)",
+                        color: "#92400e",
+                      }}
+                      role="note"
+                    >
+                      <span>
+                        🍎 <strong>Accessing from Mac:</strong> You are viewing this
+                        console on a Mac, but your thermal printers are connected to
+                        your Windows PC.
+                        <br />
+                        • On the Windows PC, run <code>windows-printer-bridge.bat</code>{" "}
+                        (in the <code>scripts</code> folder).
+                        <br />
+                        • Enter the Windows PC&apos;s IP address shown on that screen
+                        into &ldquo;Windows PC IP&rdquo; below.
+                        <br />• Or open this page directly in Google Chrome / Edge on
+                        that Windows PC.
+                      </span>
+                    </div>
+                  )}
+
                   <form onSubmit={savePrinters} className="ops-printer-form">
                     <div className="ops-form-row">
                       <label className="ops-field">
@@ -1677,6 +1762,50 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
                             58mm — Compact Thermal Roll (2-inch width)
                           </option>
                         </select>
+                      </label>
+                    </div>
+
+                    <div className="ops-form-row">
+                      <label className="ops-field" style={{ gridColumn: "1 / -1" }}>
+                        <span>
+                          Windows PC IP / Hostname
+                          <small>
+                            IP address of the Windows machine with the printers connected (e.g. 192.168.1.xxx or 127.0.0.1)
+                          </small>
+                        </span>
+                        <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                          <input
+                            placeholder="127.0.0.1 or 192.168.1.xxx"
+                            value={bridgeHostDraft}
+                            onChange={(e) => setBridgeHostDraft(e.target.value)}
+                            maxLength={120}
+                            style={{ flex: 1 }}
+                          />
+                          <button
+                            type="button"
+                            className="ops-button secondary small"
+                            disabled={bridgeTesting}
+                            onClick={testBridgeConnection}
+                          >
+                            {bridgeTesting ? "Testing…" : "Test connection"}
+                          </button>
+                        </div>
+                        {bridgeTestMessage && (
+                          <small
+                            style={{
+                              marginTop: "4px",
+                              display: "block",
+                              color: bridgeTestMessage.startsWith("✓")
+                                ? "#16a34a"
+                                : bridgeTestMessage.startsWith("❌")
+                                  ? "#dc2626"
+                                  : "inherit",
+                              fontWeight: 500,
+                            }}
+                          >
+                            {bridgeTestMessage}
+                          </small>
+                        )}
                       </label>
                     </div>
 
@@ -1831,23 +1960,29 @@ export default function StaffConsole({ mode }: { mode: "admin" | "cashier" }) {
                     <h4>Windows POS terminal setup</h4>
                     <ul>
                       <li>
-                        Both thermal receipt printers can be connected via USB or
-                        Ethernet to the same Windows PC.
+                        Both thermal receipt printers (Kitchen &amp; Cashier) connect
+                        via USB or Ethernet to the Windows machine.
                       </li>
                       <li>
-                        In Windows, open{" "}
+                        In Windows, check{" "}
                         <strong>
                           Settings &gt; Bluetooth &amp; Devices &gt; Printers
                           &amp; Scanners
                         </strong>{" "}
-                        to rename or confirm them (e.g. &ldquo;Kitchen
-                        Printer&rdquo; and &ldquo;Cashier Printer&rdquo;).
+                        to see your printer names.
                       </li>
                       <li>
-                        If accessing Chennai Palace remotely from your Windows
-                        browser, run <code>windows-printer-bridge.bat</code> in
-                        the <code>scripts</code> folder to allow one-click
-                        detection.
+                        <strong>To scan &amp; print from this Mac or an iPad:</strong>{" "}
+                        Run <code>windows-printer-bridge.bat</code> on the
+                        Windows machine (right-click &quot;Run as administrator&quot;
+                        to enable Wi-Fi access), enter its local IP address above,
+                        and click <strong>Scan Windows printers</strong>.
+                      </li>
+                      <li>
+                        <strong>To scan &amp; print directly on Windows:</strong>{" "}
+                        Open Google Chrome or Microsoft Edge on that Windows PC,
+                        visit Chennai Palace, run <code>windows-printer-bridge.bat</code>,
+                        and leave IP as <code>127.0.0.1</code>.
                       </li>
                     </ul>
                   </div>

@@ -8,6 +8,7 @@ export type PrintJob = {
   destination: "kitchen" | "cashier";
   printerName?: string;
   paperSize?: "80mm" | "58mm";
+  bridgeHost?: string;
   retries?: number;
 };
 
@@ -18,7 +19,11 @@ export type OrderPrintStatus = {
   timestamp?: number;
 };
 
-const BRIDGE_URL = "http://127.0.0.1:18080";
+export function getBridgeUrl(bridgeHost?: string): string {
+  const host = (bridgeHost || "127.0.0.1").trim() || "127.0.0.1";
+  return `http://${host}:18080`;
+}
+
 const queue: PrintJob[] = [];
 let isProcessingQueue = false;
 
@@ -54,11 +59,11 @@ function notifyStatus(orderId: string, dest: "kitchen" | "cashier", state: "queu
 /**
  * Checks if the local Windows Printer Bridge is reachable.
  */
-export async function checkWindowsBridge(): Promise<boolean> {
+export async function checkWindowsBridge(bridgeHost?: string): Promise<boolean> {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 1200);
-    const res = await fetch(`${BRIDGE_URL}/printers`, {
+    const res = await fetch(`${getBridgeUrl(bridgeHost)}/printers`, {
       method: "GET",
       signal: controller.signal,
     });
@@ -88,7 +93,7 @@ async function printViaBridge(job: PrintJob): Promise<boolean> {
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 4000);
-  const res = await fetch(`${BRIDGE_URL}/print`, {
+  const res = await fetch(`${getBridgeUrl(job.bridgeHost)}/print`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -227,6 +232,7 @@ export function enqueueOrderPrint(
       destination: dest,
       printerName,
       paperSize,
+      bridgeHost: settings.bridge_host || "127.0.0.1",
     });
   }
 

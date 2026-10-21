@@ -53,6 +53,7 @@ export type PrinterSettings = {
   kitchen_paper_size: PaperSize;
   cashier_printer: string;
   cashier_paper_size: PaperSize;
+  bridge_host?: string;
   updated_at?: string;
   updated_by?: string | null;
 };

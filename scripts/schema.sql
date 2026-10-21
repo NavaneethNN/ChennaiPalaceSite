@@ -91,13 +91,15 @@ CREATE TABLE IF NOT EXISTS palace.printer_settings (
  kitchen_paper_size text NOT NULL DEFAULT '80mm' CHECK (kitchen_paper_size IN ('80mm', '58mm')),
  cashier_printer text NOT NULL DEFAULT '',
  cashier_paper_size text NOT NULL DEFAULT '80mm' CHECK (cashier_paper_size IN ('80mm', '58mm')),
+ bridge_host text NOT NULL DEFAULT '127.0.0.1',
  updated_at timestamptz NOT NULL DEFAULT now(),
  updated_by text
 );
 ALTER TABLE palace.printer_settings ADD COLUMN IF NOT EXISTS kitchen_paper_size text NOT NULL DEFAULT '80mm';
 ALTER TABLE palace.printer_settings ADD COLUMN IF NOT EXISTS cashier_paper_size text NOT NULL DEFAULT '80mm';
-INSERT INTO palace.printer_settings (id, kitchen_printer, kitchen_paper_size, cashier_printer, cashier_paper_size)
- VALUES (1, '', '80mm', '', '80mm')
+ALTER TABLE palace.printer_settings ADD COLUMN IF NOT EXISTS bridge_host text NOT NULL DEFAULT '127.0.0.1';
+INSERT INTO palace.printer_settings (id, kitchen_printer, kitchen_paper_size, cashier_printer, cashier_paper_size, bridge_host)
+ VALUES (1, '', '80mm', '', '80mm', '127.0.0.1')
  ON CONFLICT (id) DO NOTHING;
 
 DROP TRIGGER IF EXISTS live_change ON palace.printer_settings;

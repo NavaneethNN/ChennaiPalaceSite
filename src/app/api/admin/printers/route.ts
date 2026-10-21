@@ -8,13 +8,14 @@ import {
 
 export const runtime = "nodejs";
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
     await staff(true);
-    const [settings, detected] = await Promise.all([
-      getPrinterSettings(),
-      getSystemPrinters(),
-    ]);
+    const url = new URL(request.url);
+    const settings = await getPrinterSettings();
+    const queryBridgeHost =
+      url.searchParams.get("bridge_host") || settings.bridge_host || "127.0.0.1";
+    const detected = await getSystemPrinters(queryBridgeHost);
 
     return json({
       settings,
@@ -49,6 +50,10 @@ export async function POST(request: Request) {
       data.kitchen_paper_size === "58mm" ? "58mm" : "80mm";
     const cashierPaper =
       data.cashier_paper_size === "58mm" ? "58mm" : "80mm";
+    const bridgeHost =
+      typeof data.bridge_host === "string" && data.bridge_host.trim()
+        ? data.bridge_host.trim()
+        : "127.0.0.1";
 
     const saved = await savePrinterSettings(
       data.kitchen_printer,
@@ -56,6 +61,7 @@ export async function POST(request: Request) {
       data.cashier_printer,
       cashierPaper,
       user.name,
+      bridgeHost,
     );
 
     return json({ ok: true, settings: saved });

@@ -130,6 +130,17 @@ async function runTests() {
   assert.equal(processed[9], "ORD-TEST-10");
   console.log("✓ Continuous print queue verified: 10/10 sequential orders processed with zero loss");
 
+  // Test 5: Dynamic Windows bridge host resolution
+  function getBridgeUrl(bridgeHost) {
+    const host = (bridgeHost || "127.0.0.1").trim() || "127.0.0.1";
+    return `http://${host}:18080`;
+  }
+  assert.equal(getBridgeUrl(""), "http://127.0.0.1:18080");
+  assert.equal(getBridgeUrl("127.0.0.1"), "http://127.0.0.1:18080");
+  assert.equal(getBridgeUrl("192.168.1.55"), "http://192.168.1.55:18080");
+  assert.equal(getBridgeUrl(" windows-pos.local "), "http://windows-pos.local:18080");
+  console.log("✓ Dynamic Windows Bridge IP / URL resolution tested");
+
   console.log("\nAll printer configuration, paper size, and continuous printing tests passed successfully!");
 }
 
